@@ -248,5 +248,5 @@ def main():
         print(e)
 
 if __name__ == "__main__":
-    # trying to submit using: "spark-submit spark_code.py --packages org.apache.spark:spark-sql-kafka-0-10_2.13:4.1.1"
+    # trying to submit using: "spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.13:4.0.1 spark_code.py"
     main()
