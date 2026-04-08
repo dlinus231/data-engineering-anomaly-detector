@@ -139,9 +139,6 @@ def build_stream(spark, out_path, ckpt_path):
         .option("kafka.sasl.jaas.config", confluent_connection_string) \
         .load()
 
-
-    kafka_df.head(5)
-
     parsed_df = kafka_df.select(
         from_json(col("value").cast("string"), schema).alias("data")
     ).select(
@@ -158,7 +155,7 @@ def build_stream(spark, out_path, ckpt_path):
 
         current_timestamp().alias("processing_time")
     )
-    parsed_df.head(5)
+
     console_write_stream = parsed_df.writeStream \
         .format("console") \
         .outputMode("update") \
