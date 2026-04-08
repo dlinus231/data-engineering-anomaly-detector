@@ -130,7 +130,7 @@ def build_stream(spark, out_path, ckpt_path):
     kafka_df = spark \
         .readStream \
         .format("kafka") \
-        .option("kafka.bootstrap.servers", "pkc-43n10.us-central1.gcp.confluent.cloud:9092") \
+        .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP_SERVERS) \
         .option("subscribe", KAFKA_TOPIC) \
         .option("startingOffsets", "earliest") \
         .option("kafka.security.protocol","SASL_SSL") \
@@ -248,4 +248,5 @@ def main():
         print(e)
 
 if __name__ == "__main__":
+    # trying to submit using: "spark-submit spark_code.py --packages org.apache.spark:spark-sql-kafka-0-10_2.13:4.1.1"
     main()
