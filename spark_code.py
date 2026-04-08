@@ -156,83 +156,83 @@ def build_stream(spark, out_path, ckpt_path):
         current_timestamp().alias("processing_time")
     )
 
-    console_write_stream = parsed_df.writeStream \
-        .format("console") \
-        .outputMode("update") \
+    # console_write_stream = parsed_df.writeStream \
+    #     .format("console") \
+    #     .outputMode("update") \
+    #     .start()
+
+    # try:
+    #     console_write_stream.awaitTermination()
+    # except KeyboardInterrupt:
+    #     console_write_stream.stop()
+    # finally:
+    #     spark.stop()
+
+    # -----------------------------------
+    # 4. Add watermark (for state cleanup)
+    # -----------------------------------
+    watermarked_df = parsed_df.withWatermark("event_ts", "3 hours")
+
+    # -----------------------------------
+    # 5. Stateful anomaly detection
+    # -----------------------------------
+
+    # Apply stateful processing
+    result_df = watermarked_df.groupBy("user_id").flatMapGroupsWithState(
+        outputMode="append",
+        updateFunction=update_state,
+        timeoutConf=GroupStateTimeout.EventTimeTimeout
+    )
+
+    # Define schema for result
+
+    result_schema = StructType([
+        StructField("user_id", StringType()),
+        StructField("event_ts", TimestampType()),
+        StructField("value", DoubleType()),
+        StructField("mean", DoubleType()),
+        StructField("std", DoubleType()),
+        StructField("is_anomaly", BooleanType())
+    ])
+
+    result_df = spark.createDataFrame(result_df, result_schema)
+
+    # -----------------------------------
+    # 6. Split outputs
+    # -----------------------------------
+    raw_df = result_df
+    alerts_df = result_df.filter(col("is_anomaly") == True)
+
+    # Add partition column
+    raw_df = raw_df.withColumn("event_dt", to_date("event_ts"))
+    alerts_df = alerts_df.withColumn("event_dt", to_date("event_ts"))
+
+    # -----------------------------------
+    # 7. Write raw data to CSV
+    # -----------------------------------
+    raw_query = raw_df.writeStream \
+        .format("csv") \
+        .option("path", "/tmp/raw_output") \
+        .option("checkpointLocation", "/tmp/checkpoints/raw") \
+        .partitionBy("event_dt") \
+        .outputMode("append") \
         .start()
 
-    try:
-        console_write_stream.awaitTermination()
-    except KeyboardInterrupt:
-        console_write_stream.stop()
-    finally:
-        spark.stop()
+    # -----------------------------------
+    # 8. Write alerts to CSV
+    # -----------------------------------
+    alerts_query = alerts_df.writeStream \
+        .format("csv") \
+        .option("path", "/tmp/alerts_output") \
+        .option("checkpointLocation", "/tmp/checkpoints/alerts") \
+        .partitionBy("event_dt") \
+        .outputMode("append") \
+        .start()
 
-    # # -----------------------------------
-    # # 4. Add watermark (for state cleanup)
-    # # -----------------------------------
-    # watermarked_df = parsed_df.withWatermark("event_ts", "3 hours")
-
-    # # -----------------------------------
-    # # 5. Stateful anomaly detection
-    # # -----------------------------------
-
-    # # Apply stateful processing
-    # result_df = watermarked_df.groupBy("user_id").flatMapGroupsWithState(
-    #     outputMode="append",
-    #     updateFunction=update_state,
-    #     timeoutConf=GroupStateTimeout.EventTimeTimeout
-    # )
-
-    # # Define schema for result
-
-    # result_schema = StructType([
-    #     StructField("user_id", StringType()),
-    #     StructField("event_ts", TimestampType()),
-    #     StructField("value", DoubleType()),
-    #     StructField("mean", DoubleType()),
-    #     StructField("std", DoubleType()),
-    #     StructField("is_anomaly", BooleanType())
-    # ])
-
-    # result_df = spark.createDataFrame(result_df, result_schema)
-
-    # # -----------------------------------
-    # # 6. Split outputs
-    # # -----------------------------------
-    # raw_df = result_df
-    # alerts_df = result_df.filter(col("is_anomaly") == True)
-
-    # # Add partition column
-    # raw_df = raw_df.withColumn("event_dt", to_date("event_ts"))
-    # alerts_df = alerts_df.withColumn("event_dt", to_date("event_ts"))
-
-    # # -----------------------------------
-    # # 7. Write raw data to CSV
-    # # -----------------------------------
-    # raw_query = raw_df.writeStream \
-    #     .format("csv") \
-    #     .option("path", "/tmp/raw_output") \
-    #     .option("checkpointLocation", "/tmp/checkpoints/raw") \
-    #     .partitionBy("event_dt") \
-    #     .outputMode("append") \
-    #     .start()
-
-    # # -----------------------------------
-    # # 8. Write alerts to CSV
-    # # -----------------------------------
-    # alerts_query = alerts_df.writeStream \
-    #     .format("csv") \
-    #     .option("path", "/tmp/alerts_output") \
-    #     .option("checkpointLocation", "/tmp/checkpoints/alerts") \
-    #     .partitionBy("event_dt") \
-    #     .outputMode("append") \
-    #     .start()
-
-    # # -----------------------------------
-    # # 9. Await termination
-    # # -----------------------------------
-    # spark.streams.awaitAnyTermination()
+    # -----------------------------------
+    # 9. Await termination
+    # -----------------------------------
+    spark.streams.awaitAnyTermination()
 def main():
     spark_session = create_spark_session()
     print("spark_session_created")
