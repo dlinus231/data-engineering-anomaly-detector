@@ -127,6 +127,7 @@ def build_stream(spark, out_path, ckpt_path):
     # Source - https://stackoverflow.com/a/63948372
     # Posted by YoongKang Lim
     # Retrieved 2026-04-07, License - CC BY-SA 4.0
+    confluent_connection_string = f"""org.apache.kafka.common.security.plain.PlainLoginModule required username="{KAFKA_API_KEY}" password="{KAFKA_API_SECRET}";"""
     kafka_df = spark \
         .readStream \
         .format("kafka") \
@@ -135,7 +136,7 @@ def build_stream(spark, out_path, ckpt_path):
         .option("startingOffsets", "earliest") \
         .option("kafka.security.protocol","SASL_SSL") \
         .option("kafka.sasl.mechanism", "PLAIN") \
-        .option("kafka.sasl.jaas.config", f"""kafkashaded.org.apache.kafka.common.security.plain.PlainLoginModule required username="{KAFKA_API_KEY}" password="{KAFKA_API_SECRET}";""") \
+        .option("kafka.sasl.jaas.config", confluent_connection_string) \
         .load()
 
 
