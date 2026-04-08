@@ -1,95 +1,29 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, from_json, to_timestamp, window, current_timestamp
+from pyspark.sql.functions import col, from_json, to_timestamp, window, current_timestamp, to_date
 from pyspark.sql.types import (
     StructType, StructField,
     IntegerType, StringType,
-    DoubleType, TimestampType
+    DoubleType, TimestampType,
+    BooleanType
 )
 from pyspark.sql.streaming import GroupState, GroupStateTimeout
 
 import math
 from datetime import timedelta
+from dotenv import load_dotenv
+import os
+
 
 # -----------------------------------
 # 1. Spark session
 # -----------------------------------
-spark = SparkSession.builder \
-    .appName("3hr-anomaly-detector") \
-    .getOrCreate()
+def create_spark_session(app_name="anomaly-detector"):
 
-spark.conf.set("spark.sql.shuffle.partitions", "200")
-
-# -----------------------------------
-# 2. Schema
-# -----------------------------------
-
-# if cols are nested JSON
-# schema = StructType([
-#     StructField("id", IntegerType(), True),
-#     StructField("name", StringType(), True),
-#     StructField("symbol", StringType(), True),
-
-#     StructField("quote", StructType([
-#         StructField("USD", StructType([
-#             StructField("price", DoubleType(), True),
-#             StructField("last_updated", TimestampType(), True),
-#             StructField("volume_24h", DoubleType(), True),
-#             StructField("volume_change_24h", DoubleType(), True),
-#             StructField("percent_change_1h", DoubleType(), True),
-#             StructField("percent_change_24h", DoubleType(), True),
-#         ]), True)
-#     ]), True)
-# ])
-
-# if cols are flattened
-schema = StructType([
-    StructField("id", IntegerType(), True),
-    StructField("name", StringType(), True),
-    StructField("symbol", StringType(), True),
-    StructField("quote.USD.price", DoubleType(), True),
-    StructField("quote.USD.last_updated", TimestampType(), True),
-    StructField("quote.USD.volume_24h", DoubleType(), True),
-    StructField("quote.USD.volume_change_24h", DoubleType(), True),
-    StructField("quote.USD.percent_change_1h", DoubleType(), True),
-    StructField("quote.USD.percent_change_24h", DoubleType(), True),
-])
-
-# -----------------------------------
-# 3. Read from Kafka
-# -----------------------------------
-kafka_df = spark.readStream \
-    .format("kafka") \
-    .option("kafka.bootstrap.servers", "localhost:9092") \
-    .option("subscribe", "input-topic") \
-    .option("startingOffsets", "latest") \
-    .load()
-
-
-parsed_df = kafka_df.select(
-    from_json(col("value").cast("string"), schema).alias("data")
-).select(
-    col("data.id"),
-    col("data.name"),
-    col("data.symbol"),
-
-    col("data.price").alias("price"),
-    col("data.last_updated").alias("event_ts"),
-    col("data.volume_24h"),
-    col("data.volume_change_24h"),
-    col("data.percent_change_1h"),
-    col("data.percent_change_24h"),
-
-    current_timestamp().alias("processing_time")
-)
-
-# -----------------------------------
-# 4. Add watermark (for state cleanup)
-# -----------------------------------
-df = parsed_df.withWatermark("event_ts", "3 hours")
-
-# -----------------------------------
-# 5. Stateful anomaly detection
-# -----------------------------------
+    spark = SparkSession.builder.appName(app_name).getOrCreate()
+    spark.sparkContext.setLogLevel("WARN")
+    # spark.conf.set("spark.sql.shuffle.partitions", "200") # maybe set better default?
+    spark.conf.set("spark.sql.session.timeZone", "UTC")
+    return spark
 
 def update_state(user_id, rows, state: GroupState):
     """
@@ -163,62 +97,142 @@ def update_state(user_id, rows, state: GroupState):
     return outputs
 
 
-# Apply stateful processing
-result_df = df.groupBy("user_id").flatMapGroupsWithState(
-    outputMode="append",
-    updateFunction=update_state,
-    timeoutConf=GroupStateTimeout.EventTimeTimeout
-)
 
-# Define schema for result
-from pyspark.sql.types import StructType, StructField, BooleanType
+def build_stream(spark, out_path, ckpt_path):
+    # load necessary dotenv vars
+    load_dotenv()
+    CMC_API_KEY = os.getenv("CMC_API_KEY")
+    KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS")
+    KAFKA_API_KEY = os.getenv("KAFKA_API_KEY")
+    KAFKA_API_SECRET = os.getenv("KAFKA_API_SECRET")
+    KAFKA_TOPIC = os.getenv("KAFKA_TOPIC")
 
-result_schema = StructType([
-    StructField("user_id", StringType()),
-    StructField("event_ts", TimestampType()),
-    StructField("value", DoubleType()),
-    StructField("mean", DoubleType()),
-    StructField("std", DoubleType()),
-    StructField("is_anomaly", BooleanType())
-])
+    spark_session = create_spark_session()
 
-result_df = spark.createDataFrame(result_df, result_schema)
+    schema = StructType([
+        StructField("id", IntegerType(), True),
+        StructField("name", StringType(), True),
+        StructField("symbol", StringType(), True),
+        StructField("price", DoubleType(), True),
+        StructField("last_updated", TimestampType(), True),
+        StructField("volume_24h", DoubleType(), True),
+        StructField("volume_change_24h", DoubleType(), True),
+        StructField("percent_change_1h", DoubleType(), True),
+        StructField("percent_change_24h", DoubleType(), True),
+    ])
 
-# -----------------------------------
-# 6. Split outputs
-# -----------------------------------
-raw_df = result_df
-alerts_df = result_df.filter(col("is_anomaly") == True)
+    # -----------------------------------
+    # 3. Read from Kafka
+    # -----------------------------------
 
-# Add partition column
-from pyspark.sql.functions import to_date
+    # Source - https://stackoverflow.com/a/63948372
+    # Posted by YoongKang Lim
+    # Retrieved 2026-04-07, License - CC BY-SA 4.0
+    kafka_df = spark \
+        .readStream \
+        .format("kafka") \
+        .option("kafka.bootstrap.servers", "pkc-43n10.us-central1.gcp.confluent.cloud:9092") \
+        .option("subscribe", KAFKA_TOPIC) \
+        .option("startingOffsets", "earliest") \
+        .option("kafka.security.protocol","SASL_SSL") \
+        .option("kafka.sasl.mechanism", "PLAIN") \
+        .option("kafka.sasl.jaas.config", f"""kafkashaded.org.apache.kafka.common.security.plain.PlainLoginModule required username="{KAFKA_API_KEY}" password="{KAFKA_API_SECRET}";""") \
+        .load()
 
-raw_df = raw_df.withColumn("event_dt", to_date("event_ts"))
-alerts_df = alerts_df.withColumn("event_dt", to_date("event_ts"))
 
-# -----------------------------------
-# 7. Write raw data to CSV
-# -----------------------------------
-raw_query = raw_df.writeStream \
-    .format("csv") \
-    .option("path", "/tmp/raw_output") \
-    .option("checkpointLocation", "/tmp/checkpoints/raw") \
-    .partitionBy("event_dt") \
-    .outputMode("append") \
-    .start()
+    kafka_df.head(5)
 
-# -----------------------------------
-# 8. Write alerts to CSV
-# -----------------------------------
-alerts_query = alerts_df.writeStream \
-    .format("csv") \
-    .option("path", "/tmp/alerts_output") \
-    .option("checkpointLocation", "/tmp/checkpoints/alerts") \
-    .partitionBy("event_dt") \
-    .outputMode("append") \
-    .start()
+    parsed_df = kafka_df.select(
+        from_json(col("value").cast("string"), schema).alias("data")
+    ).select(
+        col("data.id"),
+        col("data.name"),
+        col("data.symbol"),
 
-# -----------------------------------
-# 9. Await termination
-# -----------------------------------
-spark.streams.awaitAnyTermination()
+        col("data.price").alias("price"),
+        col("data.last_updated").alias("event_ts"),
+        col("data.volume_24h"),
+        col("data.volume_change_24h"),
+        col("data.percent_change_1h"),
+        col("data.percent_change_24h"),
+
+        current_timestamp().alias("processing_time")
+    )
+    parsed_df.head(5)
+    console_write_stream = parsed_df.writeStream \
+        .format("console") \
+        .outputMode("update") \
+        .start()
+
+    try:
+        console_write_stream.awaitTermination()
+    except KeyboardInterrupt:
+        console_write_stream.stop()
+    finally:
+        spark_session.stop()
+
+    # # -----------------------------------
+    # # 4. Add watermark (for state cleanup)
+    # # -----------------------------------
+    # watermarked_df = parsed_df.withWatermark("event_ts", "3 hours")
+
+    # # -----------------------------------
+    # # 5. Stateful anomaly detection
+    # # -----------------------------------
+
+    # # Apply stateful processing
+    # result_df = watermarked_df.groupBy("user_id").flatMapGroupsWithState(
+    #     outputMode="append",
+    #     updateFunction=update_state,
+    #     timeoutConf=GroupStateTimeout.EventTimeTimeout
+    # )
+
+    # # Define schema for result
+
+    # result_schema = StructType([
+    #     StructField("user_id", StringType()),
+    #     StructField("event_ts", TimestampType()),
+    #     StructField("value", DoubleType()),
+    #     StructField("mean", DoubleType()),
+    #     StructField("std", DoubleType()),
+    #     StructField("is_anomaly", BooleanType())
+    # ])
+
+    # result_df = spark.createDataFrame(result_df, result_schema)
+
+    # # -----------------------------------
+    # # 6. Split outputs
+    # # -----------------------------------
+    # raw_df = result_df
+    # alerts_df = result_df.filter(col("is_anomaly") == True)
+
+    # # Add partition column
+    # raw_df = raw_df.withColumn("event_dt", to_date("event_ts"))
+    # alerts_df = alerts_df.withColumn("event_dt", to_date("event_ts"))
+
+    # # -----------------------------------
+    # # 7. Write raw data to CSV
+    # # -----------------------------------
+    # raw_query = raw_df.writeStream \
+    #     .format("csv") \
+    #     .option("path", "/tmp/raw_output") \
+    #     .option("checkpointLocation", "/tmp/checkpoints/raw") \
+    #     .partitionBy("event_dt") \
+    #     .outputMode("append") \
+    #     .start()
+
+    # # -----------------------------------
+    # # 8. Write alerts to CSV
+    # # -----------------------------------
+    # alerts_query = alerts_df.writeStream \
+    #     .format("csv") \
+    #     .option("path", "/tmp/alerts_output") \
+    #     .option("checkpointLocation", "/tmp/checkpoints/alerts") \
+    #     .partitionBy("event_dt") \
+    #     .outputMode("append") \
+    #     .start()
+
+    # # -----------------------------------
+    # # 9. Await termination
+    # # -----------------------------------
+    # spark.streams.awaitAnyTermination()
