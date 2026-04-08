@@ -6,7 +6,7 @@ from pyspark.sql.types import (
     DoubleType, TimestampType,
     BooleanType
 )
-from pyspark.sql.streaming import GroupState, GroupStateTimeout
+# from pyspark.sql.streaming import GroupState, GroupStateTimeout
 
 import math
 from datetime import timedelta
@@ -25,7 +25,7 @@ def create_spark_session(app_name="anomaly-detector"):
     spark.conf.set("spark.sql.session.timeZone", "UTC")
     return spark
 
-def update_state(user_id, rows, state: GroupState):
+def update_state(user_id, rows, state):
     """
     Maintain last 3 hours of values per user_id.
     Compute mean/std and emit anomalies.
@@ -107,7 +107,6 @@ def build_stream(spark, out_path, ckpt_path):
     KAFKA_API_SECRET = os.getenv("KAFKA_API_SECRET")
     KAFKA_TOPIC = os.getenv("KAFKA_TOPIC")
 
-    spark_session = create_spark_session()
 
     schema = StructType([
         StructField("id", IntegerType(), True),
@@ -236,3 +235,17 @@ def build_stream(spark, out_path, ckpt_path):
     # # 9. Await termination
     # # -----------------------------------
     # spark.streams.awaitAnyTermination()
+def main():
+    print("hello")
+    spark_session = create_spark_session()
+    print("spark_session_created")
+    try:
+        print("trying build_stream()")
+        build_stream(spark_session, "/home/compute/d.linus/data-engineering-anomaly-detector/output", "/home/compute/d.linus/data-engineering-anomaly-detector/checkpoints")
+        print("finished build_stream()")
+    except Exception as e:
+        print("exception encountered")
+        print(e)
+
+if __name__ == "__main__":
+    main()
