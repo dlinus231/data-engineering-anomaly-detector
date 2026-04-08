@@ -166,7 +166,7 @@ def build_stream(spark, out_path, ckpt_path):
     except KeyboardInterrupt:
         console_write_stream.stop()
     finally:
-        spark_session.stop()
+        spark.stop()
 
     # # -----------------------------------
     # # 4. Add watermark (for state cleanup)
@@ -234,15 +234,14 @@ def build_stream(spark, out_path, ckpt_path):
     # # -----------------------------------
     # spark.streams.awaitAnyTermination()
 def main():
-    print("hello")
     spark_session = create_spark_session()
     print("spark_session_created")
     try:
-        print("trying build_stream()")
+        print("Trying build_stream()")
         build_stream(spark_session, "/home/compute/d.linus/data-engineering-anomaly-detector/output", "/home/compute/d.linus/data-engineering-anomaly-detector/checkpoints")
-        print("finished build_stream()")
+        print("Finished build_stream()")
     except Exception as e:
-        print("exception encountered")
+        print("Exception encountered")
         print(e)
 
 if __name__ == "__main__":
