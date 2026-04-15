@@ -210,10 +210,16 @@ def build_stream(spark, out_path, ckpt_path):
     # -----------------------------------
     # 7. Write raw data to CSV
     # -----------------------------------
+    raw_output_path = out_path + "/raw_output"
+    raw_output_checkpoint_path = ckpt_path + "/raw_output"
+
+    alert_path = out_path + "/raw_alert"
+    alert_checkpoint_path = ckpt_path + "/raw_alert"
+
     raw_query = raw_df.writeStream \
         .format("csv") \
-        .option("path", "/tmp/raw_output") \
-        .option("checkpointLocation", "/tmp/checkpoints/raw") \
+        .option("path", raw_output_path) \
+        .option("checkpointLocation", raw_output_checkpoint_path) \
         .partitionBy("event_dt") \
         .outputMode("append") \
         .start()
@@ -223,23 +229,31 @@ def build_stream(spark, out_path, ckpt_path):
     # -----------------------------------
     alerts_query = alerts_df.writeStream \
         .format("csv") \
-        .option("path", "/tmp/alerts_output") \
-        .option("checkpointLocation", "/tmp/checkpoints/alerts") \
+        .option("path", alert_path) \
+        .option("checkpointLocation", alert_checkpoint_path) \
         .partitionBy("event_dt") \
         .outputMode("append") \
         .start()
 
+    return [raw_query, alerts_query]
     # -----------------------------------
     # 9. Await termination
     # -----------------------------------
     spark.streams.awaitAnyTermination()
+
 def main():
     spark_session = create_spark_session()
     print("spark_session_created")
     try:
         print("Trying build_stream()")
-        build_stream(spark_session, "/home/compute/d.linus/data-engineering-anomaly-detector/output", "/home/compute/d.linus/data-engineering-anomaly-detector/checkpoints")
+        queries = build_stream(spark_session, "/home/compute/d.linus/data-engineering-anomaly-detector/output", "/home/compute/d.linus/data-engineering-anomaly-detector/checkpoints")
+        for q in queries:
+            q.awaitTermination()
         print("Finished build_stream()")
+    except KeyboardInterrupt:
+        for q in queries:
+            q.stop()
+        print("Exiting gracefully from keyboard interrupt")
     except Exception as e:
         print("Exception encountered")
         print(e)
