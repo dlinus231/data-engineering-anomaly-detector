@@ -177,7 +177,7 @@ def build_stream(spark, out_path, ckpt_path):
     # -----------------------------------
 
     # Apply stateful processing
-    result_df = watermarked_df.groupByKey(lambda row: row.user_id) \
+    result_df = watermarked_df.groupByKey(lambda row: row.id) \
         .flatMapGroupsWithState(
             outputMode="append",
             updateFunction=update_state,
