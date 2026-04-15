@@ -49,6 +49,34 @@ def extract_record(crypto_dict):
         'percent_change_24h': crypto_dict.get('quote', {}).get('USD', {}).get('percent_change_24h'),
     }
 
+def append_to_csv(json_obj, filePath="example_records.csv"):
+    import csv
+    fieldnames = [
+        'id', 
+        'name', 
+        'symbol',
+        'price',
+        'last_updated',
+        'volume_24h',
+        'volume_change_24h',
+        'percent_change_1h',
+        'percent_change_24h'
+    ]
+
+    file_exists = os.path.exists(filePath)
+    file_empty = (not file_exists) or os.path.getsize(filePath) == 0
+
+    with open(filePath, "a", newline="") as csvfile:  # append mode
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+
+        # Only write header if file is new or empty
+        if file_empty:
+            writer.writeheader()
+
+        for crypto_dict in json_obj['data']:
+            flattened_crypto_dict = extract_record(crypto_dict)
+            writer.writerow(flattened_crypto_dict)
+
 
 def publish_to_kafka(producer, json_obj, topic=KAFKA_TOPIC):
     """
@@ -98,7 +126,8 @@ while True:
         response = session.get(prod_url, params=parameters)
         json_obj = json.loads(response.text)
         publish_to_kafka(producer, json_obj)
-
+        # print("JSON", json_obj)
+        # append_to_csv(json_obj)
     except (ConnectionError, Timeout, TooManyRedirects) as e:
         print(f"API request failed: {e}")
     except Exception as e:
