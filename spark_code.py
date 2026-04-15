@@ -101,7 +101,6 @@ def update_state(user_id, rows, state):
 def build_stream(spark, out_path, ckpt_path):
     # load necessary dotenv vars
     load_dotenv()
-    CMC_API_KEY = os.getenv("CMC_API_KEY")
     KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS")
     KAFKA_API_KEY = os.getenv("KAFKA_API_KEY")
     KAFKA_API_SECRET = os.getenv("KAFKA_API_SECRET")
@@ -178,11 +177,12 @@ def build_stream(spark, out_path, ckpt_path):
     # -----------------------------------
 
     # Apply stateful processing
-    result_df = watermarked_df.groupBy("user_id").flatMapGroupsWithState(
-        outputMode="append",
-        updateFunction=update_state,
-        timeoutConf=GroupStateTimeout.EventTimeTimeout
-    )
+    result_df = watermarked_df.groupByKey(lambda row: row.user_id) \
+        .flatMapGroupsWithState(
+            outputMode="append",
+            updateFunction=update_state,
+            timeoutConf=GroupStateTimeout.EventTimeTimeout
+        )
 
     # Define schema for result
 
