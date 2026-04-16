@@ -4,7 +4,7 @@ from pyspark.sql.types import (
     StructType, StructField,
     IntegerType, StringType,
     DoubleType, TimestampType,
-    BooleanType
+    BooleanType, ArrayType
 )
 # from pyspark.sql.streaming import GroupState, GroupStateTimeout
 
@@ -177,21 +177,6 @@ def build_stream(spark, out_path, ckpt_path):
     # 5. Stateful anomaly detection
     # -----------------------------------
 
-    # Apply stateful processing
-    result_df = watermarked_df.groupByKey(lambda row: row.id) \
-        .flatMapGroupsWithState(
-            outputMode="append",
-            updateFunction=update_state,
-            timeoutConf=GroupStateTimeout.EventTimeTimeout
-        )
-    # result_df = watermarked_df.groupBy("id").applyInPandasWithState(
-    #     update_state,
-    #     outputStructType=output_schema,
-    #     stateStructType=state_schema,
-    #     outputMode="append",
-    #     timeoutConf="EventTimeTimeout"
-    # )
-
     # Define schema for result
     result_schema = StructType([
         StructField("user_id", StringType()),
@@ -201,6 +186,36 @@ def build_stream(spark, out_path, ckpt_path):
         StructField("std", DoubleType()),
         StructField("is_anomaly", BooleanType())
     ])
+
+    state_schema = StructType([
+        StructField(
+            "history",
+            ArrayType(
+                StructType([
+                    StructField("ts", DoubleType(), True),   # timestamp as float
+                    StructField("value", DoubleType(), True)
+                ])
+            ),
+            True
+        )
+    ])
+
+    # Apply stateful processing
+    # result_df = watermarked_df.groupByKey(lambda row: row.id) \
+    #     .flatMapGroupsWithState(
+    #         outputMode="append",
+    #         updateFunction=update_state,
+    #         timeoutConf=GroupStateTimeout.EventTimeTimeout
+    #     )
+
+    result_df = watermarked_df.groupBy("id").applyInPandasWithState(
+        update_state,
+        outputStructType=result_schema,
+        stateStructType=state_schema,
+        outputMode="append",
+        timeoutConf="EventTimeTimeout"
+    )
+
 
     result_df = spark.createDataFrame(result_df, result_schema)
 
