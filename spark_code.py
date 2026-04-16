@@ -7,7 +7,7 @@ from pyspark.sql.types import (
     DoubleType, TimestampType,
     BooleanType, ArrayType
 )
-from pyspark.sql.streaming import GroupState, GroupStateTimeout
+# from pyspark.sql.streaming import GroupState, GroupStateTimeout
 
 import math
 from datetime import timedelta
@@ -91,7 +91,8 @@ def update_state(key, pdf_iter, state):
     state.update({"history": history})
 
     # Timeout
-    state.setTimeoutDuration("3 hours")
+    THREE_HOURS_MS = 3 * 60 * 60 * 1000
+    state.setTimeoutDuration(THREE_HOURS_MS)
 
 
 def build_stream(spark, out_path, ckpt_path):
