@@ -1,6 +1,6 @@
 from pyspark.sql import SparkSession
 from pyspark.sql.window import Window
-from pyspark.sql.functions import col, from_json, to_timestamp, window, current_timestamp, to_date, avg, variance, when, count
+from pyspark.sql.functions import col, from_json, to_timestamp, window, current_timestamp, to_date, avg, variance, when, count, struct
 from pyspark.sql.types import (
     StructType, StructField,
     IntegerType, StringType,
@@ -15,6 +15,8 @@ from dotenv import load_dotenv
 import os
 import traceback
 
+
+# continue from this chat: https://chatgpt.com/c/69e106f7-67f0-8332-a427-2fa286905ad1
 
 # -----------------------------------
 # 1. Spark session
@@ -174,7 +176,14 @@ def build_stream(spark, out_path, ckpt_path):
     # 4. Add watermark (for state cleanup)
     # -----------------------------------
     watermarked_df = parsed_df.withWatermark("event_ts", "3 hours")
-
+    watermarked_df = watermarked_df.withColumn(
+        "row",
+        struct(
+            col("id"),
+            col("event_ts"),
+            col("price")
+        )
+    )
     # -----------------------------------
     # 5. Stateful anomaly detection
     # -----------------------------------
