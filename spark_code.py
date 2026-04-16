@@ -12,6 +12,7 @@ import math
 from datetime import timedelta
 from dotenv import load_dotenv
 import os
+import traceback
 
 
 # -----------------------------------
@@ -217,7 +218,7 @@ def build_stream(spark, out_path, ckpt_path):
     )
 
 
-    result_df = spark.createDataFrame(result_df, result_schema)
+    # result_df = spark.createDataFrame(result_df, result_schema)
 
     # -----------------------------------
     # 6. Split outputs
@@ -279,6 +280,7 @@ def main():
     except Exception as e:
         print("Exception encountered")
         print(e)
+        traceback.print_exc()
 
 if __name__ == "__main__":
     # trying to submit using: "spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.13:4.0.1 spark_code.py"
