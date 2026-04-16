@@ -7,13 +7,14 @@ from pyspark.sql.types import (
     DoubleType, TimestampType,
     BooleanType, ArrayType
 )
-# from pyspark.sql.streaming import GroupState, GroupStateTimeout
+from pyspark.sql.streaming import GroupState, GroupStateTimeout
 
 import math
 from datetime import timedelta
 from dotenv import load_dotenv
 import os
 import traceback
+import pandas as pd
 
 
 # continue from this chat: https://chatgpt.com/c/69e106f7-67f0-8332-a427-2fa286905ad1
@@ -29,78 +30,68 @@ def create_spark_session(app_name="anomaly-detector"):
     spark.conf.set("spark.sql.session.timeZone", "UTC")
     return spark
 
-def update_state(user_id, rows, state):
-    """
-    Maintain last 3 hours of values per user_id.
-    Compute mean/std and emit anomalies.
-    """
+def update_state(key, pdf_iter, state):
+    Z_SCORE_THRESHOLD = 1.5 # the threshold above which an alert is sent
+    user_id = key[0]
 
-    # state = list of (timestamp, value)
-    history = state.get() if state.exists else []
+    # Load existing state
+    if state.exists:
+        history = state.get()["history"]
+    else:
+        history = []
 
-    outputs = []
-
+    THREE_HOURS = 30 * 60  # 30 minutes for testing
     # THREE_HOURS = 3 * 60 * 60  # seconds
-    THREE_HOURS = 30 * 60  # 30 minutes
 
-    for row in rows:
-        current_ts = row.event_ts.to_timestamp()
-        val = row.value
+    for pdf in pdf_iter:
+        outputs = []
 
-        # 1. Add new event
-        history.append((current_ts, val))
+        # Ensure sorted by event time
+        pdf = pdf.sort_values("event_ts")
 
-        # 2. Evict old events
-        history = [
-            (ts, v) for (ts, v) in history
-            if current_ts - ts <= THREE_HOURS
-        ]
+        for _, row in pdf.iterrows():
+            current_ts = row["event_ts"]
+            val = row["price"]   # IMPORTANT: your column is "price"
 
-        # 3. Compute stats
-        values = [v for (_, v) in history]
+            # 1. Add new event
+            history.append({"ts": current_ts, "value": val})
 
-        if len(values) > 1:
-            mean = sum(values) / len(values)
-            variance = sum((v - mean) ** 2 for v in values) / len(values)
-            std = math.sqrt(variance)
+            # 2. Evict old events
+            history = [
+                h for h in history
+                if (current_ts - h["ts"]).total_seconds() <= THREE_HOURS
+            ]
 
-            # 4. Detect anomaly
-            if std > 0 and abs(val - mean) > 3 * std:
-                outputs.append((
-                    user_id,
-                    row.event_ts,
-                    val,
-                    mean,
-                    std,
-                    True  # is_anomaly
-                ))
+            values = [h["value"] for h in history]
+
+            if len(values) > 1:
+                mean = sum(values) / len(values)
+                variance = sum((v - mean) ** 2 for v in values) / len(values)
+                std = math.sqrt(variance)
+
+                is_anomaly = std > 0 and abs(val - mean) > Z_SCORE_THRESHOLD * std
             else:
-                outputs.append((
-                    user_id,
-                    row.event_ts,
-                    val,
-                    mean,
-                    std,
-                    False
-                ))
-        else:
-            outputs.append((
-                user_id,
-                row.event_ts,
-                val,
-                val,
-                0.0,
-                False
-            ))
+                mean = val
+                std = 0.0
+                is_anomaly = False
 
-    # update state
-    state.update(history)
+            outputs.append({
+                "id": user_id,
+                "event_ts": current_ts,
+                "value": val,
+                "mean": mean,
+                "std": std,
+                "is_anomaly": is_anomaly
+            })
 
-    # set timeout for cleanup
+        # Emit batch
+        yield pd.DataFrame(outputs)
+
+    # Update state
+    state.update({"history": history})
+
+    # Timeout
     state.setTimeoutDuration("3 hours")
-
-    return outputs
-
 
 
 def build_stream(spark, out_path, ckpt_path):
@@ -176,107 +167,45 @@ def build_stream(spark, out_path, ckpt_path):
     # 4. Add watermark (for state cleanup)
     # -----------------------------------
     watermarked_df = parsed_df.withWatermark("event_ts", "3 hours")
-    watermarked_df = watermarked_df.withColumn(
-        "row",
-        struct(
-            col("id"),
-            col("event_ts"),
-            col("price")
-        )
-    )
-    # -----------------------------------
-    # 5. Stateful anomaly detection
-    # -----------------------------------
-    
-    # window which looks for newest previous 6 records (30 minutes of data) by crypto coin ID
 
-    # 1. Aggregate over 30-minute time window per id
-    agg_df = watermarked_df.groupBy(
-        col("id"),
-        window(col("event_ts"), "30 minutes")
-    ).agg(
-        count("*").alias("rolling_count"),
-        avg("price").alias("rolling_mean"),
-        variance("price").alias("rolling_var")
-    )
 
-    # 2. Join back to original stream (to compute per-row z-score)
-    result_df = watermarked_df.join(
-        agg_df,
-        on=[
-            watermarked_df.id == agg_df.id,
-            watermarked_df.event_ts.between(
-                agg_df.window.start,
-                agg_df.window.end
+    # TODO: Define schema for result
+    result_schema = StructType([
+        StructField("id", IntegerType()),
+        StructField("event_ts", TimestampType()),
+        StructField("value", DoubleType()),
+        StructField("mean", DoubleType()),
+        StructField("std", DoubleType()),
+        StructField("is_anomaly", BooleanType())
+    ])
+    state_schema = StructType([
+        StructField(
+            "history",
+            ArrayType(
+                StructType([
+                    StructField("ts", TimestampType()),
+                    StructField("value", DoubleType())
+                ])
             )
-        ],
-        how="left"
-    )
-
-    # 3. Compute z-score only if ≥ 5 data points
-    result_df = result_df.withColumn(
-        "curr_z_score",
-        when(
-            col("rolling_count") >= 5,
-            (col("price") - col("rolling_mean")) / (col("rolling_var") ** 0.5)
         )
+    ])
+
+    result_df = watermarked_df.groupBy("id").applyInPandasWithState(
+        update_state,
+        outputStructType=result_schema,
+        stateStructType=state_schema,
+        outputMode="append",
+        timeoutConf="EventTimeTimeout"
     )
-
-    # 4. Flag anomalies
-    result_df = result_df.withColumn(
-        "is_anomaly",
-        col("curr_z_score") >= 1.5
-    )
-
-    # Define schema for result
-    # result_schema = StructType([
-    #     StructField("id", StringType()),
-    #     StructField("event_ts", TimestampType()),
-    #     StructField("value", DoubleType()),
-    #     StructField("mean", DoubleType()),
-    #     StructField("std", DoubleType()),
-    #     StructField("is_anomaly", BooleanType())
-    # ])
-
-    # state_schema = StructType([
-    #     StructField(
-    #         "history",
-    #         ArrayType(
-    #             StructType([
-    #                 StructField("ts", DoubleType(), True),   # timestamp as float
-    #                 StructField("value", DoubleType(), True)
-    #             ])
-    #         ),
-    #         True
-    #     )
-    # ])
-
-    # Apply stateful processing
-    # result_df = watermarked_df.groupByKey(lambda row: row.id) \
-    #     .flatMapGroupsWithState(
-    #         outputMode="append",
-    #         updateFunction=update_state,
-    #         timeoutConf=GroupStateTimeout.EventTimeTimeout
-    #     )
-
-    # result_df = watermarked_df.groupBy("id").applyInPandasWithState(
-    #     update_state,
-    #     outputStructType=result_schema,
-    #     stateStructType=state_schema,
-    #     outputMode="append",
-    #     timeoutConf="EventTimeTimeout"
-    # )
-
-
-    # result_df = spark.createDataFrame(result_df, result_schema)
 
     # -----------------------------------
     # 6. Split outputs
     # -----------------------------------
-    raw_df = parsed_df
-    raw_df = raw_df.withColumn("event_dt", to_date("event_ts"))
+    # raw_df = parsed_df
+    # raw_df = raw_df.withColumn("event_dt", to_date("event_ts"))
 
-    alerts_df = result_df.filter(col("is_anomaly") == True)
+    # alerts_df = result_df.filter(col("is_anomaly") == True)
+    alerts_df = result_df # for now, push all records through
     alerts_df = alerts_df.withColumn("event_dt", to_date("event_ts"))
 
     # -----------------------------------
@@ -288,13 +217,13 @@ def build_stream(spark, out_path, ckpt_path):
     alert_path = out_path + "/raw_alert"
     alert_checkpoint_path = ckpt_path + "/raw_alert"
 
-    raw_query = raw_df.writeStream \
-        .format("csv") \
-        .option("path", raw_output_path) \
-        .option("checkpointLocation", raw_output_checkpoint_path) \
-        .partitionBy("event_dt") \
-        .outputMode("append") \
-        .start()
+    # raw_query = raw_df.writeStream \
+    #     .format("csv") \
+    #     .option("path", raw_output_path) \
+    #     .option("checkpointLocation", raw_output_checkpoint_path) \
+    #     .partitionBy("event_dt") \
+    #     .outputMode("append") \
+    #     .start()
 
     # -----------------------------------
     # 8. Write alerts to CSV
@@ -307,7 +236,8 @@ def build_stream(spark, out_path, ckpt_path):
         .outputMode("append") \
         .start()
 
-    return [raw_query, alerts_query]
+    return [alerts_query]
+    # return [raw_query, alerts_query]
 
 def main():
     spark_session = create_spark_session()
