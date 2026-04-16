@@ -1,5 +1,6 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, from_json, to_timestamp, window, current_timestamp, to_date
+from pyspark.sql.window import Window
+from pyspark.sql.functions import col, from_json, to_timestamp, window, current_timestamp, to_date, avg, variance, when, count
 from pyspark.sql.types import (
     StructType, StructField,
     IntegerType, StringType,
@@ -41,7 +42,7 @@ def update_state(user_id, rows, state):
     THREE_HOURS = 30 * 60  # 30 minutes
 
     for row in rows:
-        current_ts = row.event_ts.timestamp()
+        current_ts = row.event_ts.to_timestamp()
         val = row.value
 
         # 1. Add new event
@@ -177,29 +178,48 @@ def build_stream(spark, out_path, ckpt_path):
     # -----------------------------------
     # 5. Stateful anomaly detection
     # -----------------------------------
+    
+    # window which looks for newest previous 6 records (30 minutes of data) by crypto coin ID
+    window_spec = Window.partitionBy("id").orderBy("event_ts").rowsBetween(-5, 0)
+
+    result_df = parsed_df \
+        .withColumn("rolling_count", count("price").over(window_spec)) \
+        .withColumn("rolling_mean", avg("price").over(window_spec)) \
+        .withColumn("rolling_var", variance("price").over(window_spec)) \
+        .withColumn(
+            "curr_z_score",
+            when(
+                col("rolling_count") == 6,
+                (col("price") - col("rolling_mean")) / (col("rolling_var") ** 0.5)
+            ) \
+        .otherwise(None)
+    ) \
+    .drop("rolling_count")
+
+    result_df = result_df.withColumn("is_anomaly", col("curr_z_score") >= 1.5)
 
     # Define schema for result
-    result_schema = StructType([
-        StructField("user_id", StringType()),
-        StructField("event_ts", TimestampType()),
-        StructField("value", DoubleType()),
-        StructField("mean", DoubleType()),
-        StructField("std", DoubleType()),
-        StructField("is_anomaly", BooleanType())
-    ])
+    # result_schema = StructType([
+    #     StructField("id", StringType()),
+    #     StructField("event_ts", TimestampType()),
+    #     StructField("value", DoubleType()),
+    #     StructField("mean", DoubleType()),
+    #     StructField("std", DoubleType()),
+    #     StructField("is_anomaly", BooleanType())
+    # ])
 
-    state_schema = StructType([
-        StructField(
-            "history",
-            ArrayType(
-                StructType([
-                    StructField("ts", DoubleType(), True),   # timestamp as float
-                    StructField("value", DoubleType(), True)
-                ])
-            ),
-            True
-        )
-    ])
+    # state_schema = StructType([
+    #     StructField(
+    #         "history",
+    #         ArrayType(
+    #             StructType([
+    #                 StructField("ts", DoubleType(), True),   # timestamp as float
+    #                 StructField("value", DoubleType(), True)
+    #             ])
+    #         ),
+    #         True
+    #     )
+    # ])
 
     # Apply stateful processing
     # result_df = watermarked_df.groupByKey(lambda row: row.id) \
@@ -209,13 +229,13 @@ def build_stream(spark, out_path, ckpt_path):
     #         timeoutConf=GroupStateTimeout.EventTimeTimeout
     #     )
 
-    result_df = watermarked_df.groupBy("id").applyInPandasWithState(
-        update_state,
-        outputStructType=result_schema,
-        stateStructType=state_schema,
-        outputMode="append",
-        timeoutConf="EventTimeTimeout"
-    )
+    # result_df = watermarked_df.groupBy("id").applyInPandasWithState(
+    #     update_state,
+    #     outputStructType=result_schema,
+    #     stateStructType=state_schema,
+    #     outputMode="append",
+    #     timeoutConf="EventTimeTimeout"
+    # )
 
 
     # result_df = spark.createDataFrame(result_df, result_schema)
@@ -223,11 +243,11 @@ def build_stream(spark, out_path, ckpt_path):
     # -----------------------------------
     # 6. Split outputs
     # -----------------------------------
-    raw_df = result_df
+    raw_df = parsed_df
     alerts_df = result_df.filter(col("is_anomaly") == True)
 
     # Add partition column
-    raw_df = raw_df.withColumn("event_dt", to_date("event_ts"))
+    raw_df = parsed_df.withColumn("event_dt", to_date("event_ts"))
     alerts_df = alerts_df.withColumn("event_dt", to_date("event_ts"))
 
     # -----------------------------------
@@ -259,10 +279,6 @@ def build_stream(spark, out_path, ckpt_path):
         .start()
 
     return [raw_query, alerts_query]
-    # -----------------------------------
-    # 9. Await termination
-    # -----------------------------------
-    spark.streams.awaitAnyTermination()
 
 def main():
     spark_session = create_spark_session()
