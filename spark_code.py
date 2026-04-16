@@ -244,10 +244,9 @@ def build_stream(spark, out_path, ckpt_path):
     # 6. Split outputs
     # -----------------------------------
     raw_df = parsed_df
-    alerts_df = result_df.filter(col("is_anomaly") == True)
+    raw_df = raw_df.withColumn("event_dt", to_date("event_ts"))
 
-    # Add partition column
-    raw_df = parsed_df.withColumn("event_dt", to_date("event_ts"))
+    alerts_df = result_df.filter(col("is_anomaly") == True)
     alerts_df = alerts_df.withColumn("event_dt", to_date("event_ts"))
 
     # -----------------------------------
