@@ -183,7 +183,7 @@ def build_stream(spark, out_path, ckpt_path):
     window_spec = Window.partitionBy("id").orderBy("event_ts").rowsBetween(-5, 0)
 
     result_df = parsed_df \
-        .withColumn("rolling_count", count("price").over(window_spec)) \
+        .withColumn("rolling_count", count("*").over(window_spec)) \
         .withColumn("rolling_mean", avg("price").over(window_spec)) \
         .withColumn("rolling_var", variance("price").over(window_spec)) \
         .withColumn(
