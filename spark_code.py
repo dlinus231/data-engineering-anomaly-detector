@@ -182,7 +182,7 @@ def build_stream(spark, out_path, ckpt_path):
     # window which looks for newest previous 6 records (30 minutes of data) by crypto coin ID
     window_spec = Window.partitionBy("id").orderBy("event_ts").rowsBetween(-5, 0)
 
-    result_df = parsed_df \
+    result_df = watermarked_df \
         .withColumn("rolling_count", count("*").over(window_spec)) \
         .withColumn("rolling_mean", avg("price").over(window_spec)) \
         .withColumn("rolling_var", variance("price").over(window_spec)) \
