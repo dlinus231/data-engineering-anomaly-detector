@@ -1,6 +1,7 @@
 from requests import Session
 from requests.exceptions import ConnectionError, Timeout, TooManyRedirects
-from kafka import KafkaProducer
+from confluent_kafka import Producer
+# from kafka import KafkaProducer
 from dotenv import load_dotenv
 import json
 import os
@@ -90,11 +91,12 @@ def publish_to_kafka(producer, json_obj, topic=KAFKA_TOPIC):
 
         message_key = record['symbol'].encode('utf-8') if record.get('symbol') else None
 
-        producer.send(
-            topic,
-            key=message_key,
-            value=record
-        )
+        producer.produce(topic, key=message_key, value=json.dumps(record).encode('utf-8'))
+        # producer.send(
+        #     topic,
+        #     key=message_key,
+        #     value=record
+        # )
         records_sent += 1
 
     producer.flush()
@@ -103,15 +105,22 @@ def publish_to_kafka(producer, json_obj, topic=KAFKA_TOPIC):
 
 def create_producer():
     """Create and return a Confluent Cloud KafkaProducer instance."""
-    return KafkaProducer(
-        bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
-        security_protocol='SASL_SSL',
-        sasl_mechanism='PLAIN',
-        sasl_plain_username=KAFKA_API_KEY,
-        sasl_plain_password=KAFKA_API_SECRET,
-        value_serializer=lambda v: json.dumps(v).encode('utf-8'),
-        retries=3
-    )
+    return Producer({
+        'bootstrap.servers':KAFKA_BOOTSTRAP_SERVERS,
+        'security.protocol':'SASL_SSL',
+        'sasl.mechanisms':'PLAIN',
+        'sasl.username': KAFKA_API_KEY,
+        'sasl.password':KAFKA_API_SECRET
+    })
+    # return KafkaProducer(
+    #     bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
+    #     security_protocol='SASL_SSL',
+    #     sasl_mechanism='PLAIN',
+    #     sasl_plain_username=KAFKA_API_KEY,
+    #     sasl_plain_password=KAFKA_API_SECRET,
+    #     value_serializer=lambda v: json.dumps(v).encode('utf-8'),
+    #     retries=3
+    # )
 
 
 # Create the Kafka producer once outside the loop so we
