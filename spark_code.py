@@ -180,23 +180,44 @@ def build_stream(spark, out_path, ckpt_path):
     # -----------------------------------
     
     # window which looks for newest previous 6 records (30 minutes of data) by crypto coin ID
-    window_spec = Window.partitionBy("id").orderBy("event_ts").rowsBetween(-5, 0)
 
-    result_df = watermarked_df \
-        .withColumn("rolling_count", count("*").over(window_spec)) \
-        .withColumn("rolling_mean", avg("price").over(window_spec)) \
-        .withColumn("rolling_var", variance("price").over(window_spec)) \
-        .withColumn(
-            "curr_z_score",
-            when(
-                col("rolling_count") == 6,
-                (col("price") - col("rolling_mean")) / (col("rolling_var") ** 0.5)
-            ) \
-        .otherwise(None)
+    # 1. Aggregate over 30-minute time window per id
+    agg_df = watermarked_df.groupBy(
+        col("id"),
+        window(col("event_ts"), "30 minutes")
+    ).agg(
+        count("*").alias("rolling_count"),
+        avg("price").alias("rolling_mean"),
+        variance("price").alias("rolling_var")
     )
-    # .drop("rolling_count")
 
-    result_df = result_df.withColumn("is_anomaly", col("curr_z_score") >= 1.5)
+    # 2. Join back to original stream (to compute per-row z-score)
+    result_df = watermarked_df.join(
+        agg_df,
+        on=[
+            watermarked_df.id == agg_df.id,
+            watermarked_df.event_ts.between(
+                agg_df.window.start,
+                agg_df.window.end
+            )
+        ],
+        how="left"
+    )
+
+    # 3. Compute z-score only if ≥ 5 data points
+    result_df = result_df.withColumn(
+        "curr_z_score",
+        when(
+            col("rolling_count") >= 5,
+            (col("price") - col("rolling_mean")) / (col("rolling_var") ** 0.5)
+        )
+    )
+
+    # 4. Flag anomalies
+    result_df = result_df.withColumn(
+        "is_anomaly",
+        col("curr_z_score") >= 1.5
+    )
 
     # Define schema for result
     # result_schema = StructType([
