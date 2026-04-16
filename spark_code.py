@@ -36,7 +36,8 @@ def update_state(user_id, rows, state):
 
     outputs = []
 
-    THREE_HOURS = 3 * 60 * 60  # seconds
+    # THREE_HOURS = 3 * 60 * 60  # seconds
+    THREE_HOURS = 30 * 60  # 30 minutes
 
     for row in rows:
         current_ts = row.event_ts.timestamp()
@@ -183,9 +184,15 @@ def build_stream(spark, out_path, ckpt_path):
             updateFunction=update_state,
             timeoutConf=GroupStateTimeout.EventTimeTimeout
         )
+    # result_df = watermarked_df.groupBy("id").applyInPandasWithState(
+    #     update_state,
+    #     outputStructType=output_schema,
+    #     stateStructType=state_schema,
+    #     outputMode="append",
+    #     timeoutConf="EventTimeTimeout"
+    # )
 
     # Define schema for result
-
     result_schema = StructType([
         StructField("user_id", StringType()),
         StructField("event_ts", TimestampType()),
