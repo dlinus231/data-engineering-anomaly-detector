@@ -193,8 +193,8 @@ def build_stream(spark, out_path, ckpt_path):
                 (col("price") - col("rolling_mean")) / (col("rolling_var") ** 0.5)
             ) \
         .otherwise(None)
-    ) \
-    .drop("rolling_count")
+    )
+    # .drop("rolling_count")
 
     result_df = result_df.withColumn("is_anomaly", col("curr_z_score") >= 1.5)
 
