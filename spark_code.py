@@ -30,209 +30,102 @@ def create_spark_session(app_name="anomaly-detector"):
     spark.conf.set("spark.sql.session.timeZone", "UTC")
     return spark
 
+# called once per key, where key here is a unique id for a crypto-coin
 def update_state(key, pdf_iter, state):
     # -----------------------------------
     # 0. Handle timeout safely
     # -----------------------------------
-    try:
-        if state.hasTimedOut:
-            state.remove()
-            return
+    if state.hasTimedOut:
+        state.remove()
+        return
 
-        Z_SCORE_THRESHOLD = 1.5
-        user_id = key[0]
+    Z_SCORE_THRESHOLD = 1.5
+    user_id = key[0]
 
-        # -----------------------------------
-        # 1. Load state (keep as tuples)
-        # -----------------------------------
-        if state.exists:
-            raw_state = state.get()
-            print("STATE RAW:", raw_state)
-            print("STATE TYPE:", type(raw_state))
+    # -----------------------------------
+    # 1. Load state (keep as tuples)
+    # -----------------------------------
+    if state.exists:
+        history = list(state.get()["history"])
+    else:
+        history = []
 
-            raw_history = raw_state["history"]
-            print("HISTORY TYPE:", type(raw_history))
-            print("HISTORY SAMPLE:", raw_history[:3] if raw_history else "EMPTY")
+    THREE_HOURS = 30 * 60  # 30 minutes for testing
 
-            for i, h in enumerate(raw_history[:3]):
-                print(f"h[{i}] TYPE:", type(h))
-                try:
-                    print(f"h[{i}] VALUE:", h)
-                except Exception as e:
-                    print(f"h[{i}] ERROR PRINTING:", e)
-            history = list(state.get()["history"])  # already tuple/Row-like
-        else:
-            history = []
+    # Track last timestamp safely
+    latest_ts = None
 
-        THREE_HOURS = 30 * 60  # 30 minutes for testing
+    # -----------------------------------
+    # 2. Process incoming data
+    # -----------------------------------
+    for pdf in pdf_iter: # each pandas_df is a different batch with rows for a given crypto-coin
+        outputs = []
 
-        # Track last timestamp safely
-        latest_ts = None
+        if pdf.empty:
+            continue  # avoid edge-case crashes
 
-        # -----------------------------------
-        # 2. Process incoming data
-        # -----------------------------------
-        for pdf in pdf_iter:
-            outputs = []
+        pdf = pdf.sort_values("event_ts")
 
-            if pdf.empty:
-                continue  # avoid edge-case crashes
+        for _, row in pdf.iterrows():
+            current_ts = row["event_ts"]
+            val = row["price"]
+            latest_ts = current_ts  # track safely
 
-            pdf = pdf.sort_values("event_ts")
+            # history.append((current_ts, val))
+            history.append({"ts": current_ts, "value": float(val)})
 
-            for _, row in pdf.iterrows():
-                current_ts = row["event_ts"]
-                val = row["price"]
-                latest_ts = current_ts  # track safely
+            # -----------------------------------
+            # 4. Evict old events
+            # -----------------------------------
+            history = [
+                h for h in history
+                if (current_ts - h['ts']).total_seconds() <= THREE_HOURS
+            ]
 
-                # -----------------------------------
-                # 3. Add new event (tuple!)
-                # -----------------------------------
-                history.append((current_ts, val))
+            # -----------------------------------
+            # 5. Compute stats
+            # -----------------------------------
+            values = [h['value'] for h in history]
 
-                # -----------------------------------
-                # 4. Evict old events
-                # -----------------------------------
-                history = [
-                    h for h in history
-                    if (current_ts - h[0]).total_seconds() <= THREE_HOURS
-                ]
+            if len(values) > 1:
+                mean = sum(values) / len(values)
+                variance = sum((v - mean) ** 2 for v in values) / len(values)
+                std = math.sqrt(variance)
 
-                # -----------------------------------
-                # 5. Compute stats
-                # -----------------------------------
-                values = [h[1] for h in history]
+                is_anomaly = std > 0 and abs(val - mean) > Z_SCORE_THRESHOLD * std
+            else:
+                mean = val
+                std = 0.0
+                is_anomaly = False
 
-                if len(values) > 1:
-                    mean = sum(values) / len(values)
-                    variance = sum((v - mean) ** 2 for v in values) / len(values)
-                    std = math.sqrt(variance)
+            # -----------------------------------
+            # 6. Append output
+            # -----------------------------------
+            outputs.append({
+                "id": user_id,
+                "event_ts": current_ts,
+                "value": val,
+                "mean": mean,
+                "std": std,
+                "is_anomaly": is_anomaly
+            })
 
-                    is_anomaly = std > 0 and abs(val - mean) > Z_SCORE_THRESHOLD * std
-                else:
-                    mean = val
-                    std = 0.0
-                    is_anomaly = False
+        if outputs:
+            yield pd.DataFrame(outputs)
 
-                # -----------------------------------
-                # 6. Append output
-                # -----------------------------------
-                outputs.append({
-                    "id": user_id,
-                    "event_ts": current_ts,
-                    "value": val,
-                    "mean": mean,
-                    "std": std,
-                    "is_anomaly": is_anomaly
-                })
+    # -----------------------------------
+    # 8. Update state
+    # -----------------------------------
+    state.update({"history": history})
 
-            if outputs:
-                yield pd.DataFrame(outputs)
-
-        # -----------------------------------
-        # 8. Update state
-        # -----------------------------------
-        print("UPDATING STATE WITH:")
-        print("history type:", type(history))
-        print("history sample:", history[:3] if history else "EMPTY")
-
-        for i, h in enumerate(history[:3]):
-            print(f"OUT h[{i}] TYPE:", type(h), "VALUE:", h)
-            print("TS TYPE:", type(h[0]), "VALUE TYPE:", type(h[1]))
-        state.update({"history": history})
-
-        # -----------------------------------
-        # 9. Set timeout safely
-        # -----------------------------------
-        if latest_ts is not None:
-            state.setTimeoutTimestamp(
-                int(latest_ts.timestamp() * 1000) + 3 * 60 * 60 * 1000
-            )
-    except Exception as e:
-        print("ERROR in update_state", e)
-        traceback.print_exc()
-        raw_state = state.get()
-        print("STATE RAW:", raw_state)
-        print("STATE TYPE:", type(raw_state))
-        print("history type:", type(history))
-        print("history sample:", history[:3] if history else "EMPTY")
-        for i, h in enumerate(history[:3]):
-            print(f"OUT h[{i}] TYPE:", type(h), "VALUE:", h)
-            print("TS TYPE:", type(h[0]), "VALUE TYPE:", type(h[1]))
+    # -----------------------------------
+    # 9. Set timeout safely
+    # -----------------------------------
+    if latest_ts is not None:
+        state.setTimeoutTimestamp(
+            int(latest_ts.timestamp() * 1000) + 3 * 60 * 60 * 1000
+        )
         
-# def update_state(key, pdf_iter, state):
-#     if state.hasTimedOut:
-#         state.remove()
-#         return
-
-#     Z_SCORE_THRESHOLD = 1.5 # the threshold above which an alert is sent
-#     user_id = key[0]
-
-#     # TODO: unexpected tuple h with StructType
-
-#     if state.exists:
-#         raw_history = state.get()["history"]
-#         history = [
-#             {"ts": h[0], "value": h[1]}
-#             for h in raw_history
-#         ]
-#     else:
-#         history = []
-
-#     THREE_HOURS = 30 * 60  # 30 minutes for testing
-#     # THREE_HOURS = 3 * 60 * 60  # seconds
-
-#     for pdf in pdf_iter:
-#         outputs = []
-
-#         # Ensure sorted by event time
-#         pdf = pdf.sort_values("event_ts")
-
-#         for _, row in pdf.iterrows():
-#             current_ts = row["event_ts"]
-#             val = row["price"]   # IMPORTANT: your column is "price"
-
-#             # 1. Add new event
-#             history.append({"ts": current_ts, "value": val})
-
-#             # 2. Evict old events
-#             history = [
-#                 h for h in history
-#                 if (current_ts - h["ts"]).total_seconds() <= THREE_HOURS
-#             ]
-
-#             values = [h["value"] for h in history]
-
-#             if len(values) > 1:
-#                 mean = sum(values) / len(values)
-#                 variance = sum((v - mean) ** 2 for v in values) / len(values)
-#                 std = math.sqrt(variance)
-
-#                 is_anomaly = std > 0 and abs(val - mean) > Z_SCORE_THRESHOLD * std
-#             else:
-#                 mean = val
-#                 std = 0.0
-#                 is_anomaly = False
-
-#             outputs.append({
-#                 "id": user_id,
-#                 "event_ts": current_ts,
-#                 "value": val,
-#                 "mean": mean,
-#                 "std": std,
-#                 "is_anomaly": is_anomaly
-#             })
-
-#         # Emit batch
-#         yield pd.DataFrame(outputs)
-
-#     # Update state
-#     state.update({"history": history})
-
-#     # set timeout based on latest event time seen
-#     state.setTimeoutTimestamp(int(current_ts.timestamp() * 1000) + 3 * 60 * 60 * 1000)
-
-
 def build_stream(spark, out_path, ckpt_path):
     # load necessary dotenv vars
     load_dotenv()
