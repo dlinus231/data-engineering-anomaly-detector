@@ -195,7 +195,7 @@ def build_stream(spark, out_path, ckpt_path):
         outputStructType=result_schema,
         stateStructType=state_schema,
         outputMode="append",
-        timeoutConf=GroupStateTimeout.EventTimeTimeout()
+        timeoutConf="EventTimeTimeout"
     )
 
     # -----------------------------------
