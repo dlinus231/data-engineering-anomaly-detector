@@ -134,6 +134,9 @@ def update_state(key, pdf_iter, state):
             int(latest_ts.timestamp() * 1000) + 3 * 60 * 60 * 1000
         )
         
+
+
+    
 def build_stream(spark, out_path, ckpt_path):
     # load necessary dotenv vars
     load_dotenv()
@@ -253,14 +256,41 @@ def build_stream(spark, out_path, ckpt_path):
     alert_path = out_path + "/raw_alert"
     alert_checkpoint_path = ckpt_path + "/raw_alert"
 
-    raw_query = raw_df.writeStream \
-        .format("csv") \
-        .option("path", raw_output_path) \
+    def write_raw_and_alerts(batch_df, batch_id):
+        # batch_df.persist() # check if this makes sense?
+
+        batch_df.write \
+            .format("csv") \
+            .mode("append") \
+            .option("header", "true") \
+            .partitionBy("event_dt") \
+            .save(raw_output_path)
+
+        # -----------------------------------
+        # Write alerts (same as alerts_query)
+        # -----------------------------------
+        # TODO: add logic to properly create alerts_batch_df from the batch_df (which is just the raw_df)
+        alerts_batch_df = batch_df.filter(col("id") == 1)  # adjust condition if needed
+
+        alerts_batch_df.write \
+            .format("csv") \
+            .mode("append") \
+            .partitionBy("event_dt") \
+            .save(alert_path)
+
+    combined_query = raw_df.writeStream \
+        .forEachBatch(write_raw_and_alerts) \
         .option("checkpointLocation", raw_output_checkpoint_path) \
-        .option("header", "true") \
-        .partitionBy("event_dt") \
-        .outputMode("append") \
+        .trigger(processingTime="1 minute") \
         .start()
+    # raw_query = raw_df.writeStream \
+    #     .format("csv") \
+    #     .option("path", raw_output_path) \
+    #     .option("header", "true") \
+    #     .trigger(processingTime='1 minute') \
+    #     .partitionBy("event_dt") \
+    #     .outputMode("append") \
+    #     .start()
 
     # -----------------------------------
     # 8. Write alerts to CSV
@@ -273,7 +303,7 @@ def build_stream(spark, out_path, ckpt_path):
     #     .outputMode("append") \
     #     .start()
 
-    return [raw_query]
+    return [combined_query]
     # return [alerts_query]
     # return [raw_query, alerts_query]
 
