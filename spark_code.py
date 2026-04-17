@@ -134,6 +134,13 @@ def update_state(key, pdf_iter, state):
     # -----------------------------------
     # 8. Update state
     # -----------------------------------
+    print("UPDATING STATE WITH:")
+    print("history type:", type(history))
+    print("history sample:", history[:3] if history else "EMPTY")
+
+    for i, h in enumerate(history[:3]):
+        print(f"OUT h[{i}] TYPE:", type(h), "VALUE:", h)
+        print("TS TYPE:", type(h[0]), "VALUE TYPE:", type(h[1]))
     state.update({"history": history})
 
     # -----------------------------------
