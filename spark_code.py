@@ -45,6 +45,20 @@ def update_state(key, pdf_iter, state):
     # 1. Load state (keep as tuples)
     # -----------------------------------
     if state.exists:
+        raw_state = state.get()
+        print("STATE RAW:", raw_state)
+        print("STATE TYPE:", type(raw_state))
+
+        raw_history = raw_state["history"]
+        print("HISTORY TYPE:", type(raw_history))
+        print("HISTORY SAMPLE:", raw_history[:3] if raw_history else "EMPTY")
+
+        for i, h in enumerate(raw_history[:3]):
+            print(f"h[{i}] TYPE:", type(h))
+            try:
+                print(f"h[{i}] VALUE:", h)
+            except Exception as e:
+                print(f"h[{i}] ERROR PRINTING:", e)
         history = list(state.get()["history"])  # already tuple/Row-like
     else:
         history = []
