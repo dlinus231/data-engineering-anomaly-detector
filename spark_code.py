@@ -7,7 +7,7 @@ from pyspark.sql.types import (
     DoubleType, TimestampType,
     BooleanType, ArrayType
 )
-from pyspark.sql.streaming import GroupState, GroupStateTimeout
+# from pyspark.sql.streaming import GroupState, GroupStateTimeout
 
 import math
 from datetime import timedelta
