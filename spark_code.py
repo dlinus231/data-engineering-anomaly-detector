@@ -90,8 +90,8 @@ def update_state(key, pdf_iter, state):
     # Update state
     state.update({"history": history})
 
-    # Timeout
-    state.setTimeoutDuration("3 hours")
+    # set timeout based on latest event time seen
+    state.setTimeoutTimestamp(int(current_ts.timestamp() * 1000) + 3 * 60 * 60 * 1000)
 
 
 def build_stream(spark, out_path, ckpt_path):
@@ -195,7 +195,7 @@ def build_stream(spark, out_path, ckpt_path):
         outputStructType=result_schema,
         stateStructType=state_schema,
         outputMode="append",
-        timeoutConf="EventTimeTimeout"
+        timeoutConf=GroupStateTimeout.EventTimeTimeout()
     )
 
     # -----------------------------------
