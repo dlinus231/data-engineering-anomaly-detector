@@ -31,6 +31,10 @@ def create_spark_session(app_name="anomaly-detector"):
     return spark
 
 def update_state(key, pdf_iter, state):
+    if state.hasTimedOut:
+        state.remove()
+        return
+        
     Z_SCORE_THRESHOLD = 1.5 # the threshold above which an alert is sent
     user_id = key[0]
 
