@@ -31,52 +31,62 @@ def create_spark_session(app_name="anomaly-detector"):
     return spark
 
 def update_state(key, pdf_iter, state):
+    # -----------------------------------
+    # 0. Handle timeout safely
+    # -----------------------------------
     if state.hasTimedOut:
         state.remove()
         return
-        
-    Z_SCORE_THRESHOLD = 1.5 # the threshold above which an alert is sent
+
+    Z_SCORE_THRESHOLD = 1.5
     user_id = key[0]
 
-    # Load existing state
-    # if state.exists:
-    #     history = state.get()["history"]
-    # else:
-    #     history = []
-    # TODO: unexpected tuple h with StructType
-
+    # -----------------------------------
+    # 1. Load state (keep as tuples)
+    # -----------------------------------
     if state.exists:
-        raw_history = state.get()["history"]
-        history = [
-            {"ts": h[0], "value": h[1]}
-            for h in raw_history
-        ]
+        history = list(state.get()["history"])  # already tuple/Row-like
     else:
         history = []
 
     THREE_HOURS = 30 * 60  # 30 minutes for testing
-    # THREE_HOURS = 3 * 60 * 60  # seconds
 
+    # Track last timestamp safely
+    latest_ts = None
+
+    # -----------------------------------
+    # 2. Process incoming data
+    # -----------------------------------
     for pdf in pdf_iter:
         outputs = []
 
-        # Ensure sorted by event time
+        if pdf.empty:
+            continue  # avoid edge-case crashes
+
         pdf = pdf.sort_values("event_ts")
 
         for _, row in pdf.iterrows():
             current_ts = row["event_ts"]
-            val = row["price"]   # IMPORTANT: your column is "price"
+            val = row["price"]
+            latest_ts = current_ts  # track safely
 
-            # 1. Add new event
-            history.append({"ts": current_ts, "value": val})
+            # -----------------------------------
+            # 3. Add new event (tuple!)
+            # -----------------------------------
+            history.append((current_ts, val))
 
-            # 2. Evict old events
+            # -----------------------------------
+            # 4. Evict old events
+            # -----------------------------------
             history = [
                 h for h in history
-                if (current_ts - h["ts"]).total_seconds() <= THREE_HOURS
+                if (current_ts - h[0]).total_seconds() <= THREE_HOURS
             ]
 
-            values = [h["value"] for h in history]
+            # -----------------------------------
+            # 5. Compute stats
+            # -----------------------------------
+            values = [h[1] for h in history]
 
             if len(values) > 1:
                 mean = sum(values) / len(values)
@@ -89,6 +99,9 @@ def update_state(key, pdf_iter, state):
                 std = 0.0
                 is_anomaly = False
 
+            # -----------------------------------
+            # 6. Append output
+            # -----------------------------------
             outputs.append({
                 "id": user_id,
                 "event_ts": current_ts,
@@ -98,14 +111,96 @@ def update_state(key, pdf_iter, state):
                 "is_anomaly": is_anomaly
             })
 
-        # Emit batch
-        yield pd.DataFrame(outputs)
+        # -----------------------------------
+        # 7. Emit batch output
+        # -----------------------------------
+        if outputs:
+            yield pd.DataFrame(outputs)
 
-    # Update state
+    # -----------------------------------
+    # 8. Update state
+    # -----------------------------------
     state.update({"history": history})
 
-    # set timeout based on latest event time seen
-    state.setTimeoutTimestamp(int(current_ts.timestamp() * 1000) + 3 * 60 * 60 * 1000)
+    # -----------------------------------
+    # 9. Set timeout safely
+    # -----------------------------------
+    if latest_ts is not None:
+        state.setTimeoutTimestamp(
+            int(latest_ts.timestamp() * 1000) + 3 * 60 * 60 * 1000
+        )
+        
+# def update_state(key, pdf_iter, state):
+#     if state.hasTimedOut:
+#         state.remove()
+#         return
+
+#     Z_SCORE_THRESHOLD = 1.5 # the threshold above which an alert is sent
+#     user_id = key[0]
+
+#     # TODO: unexpected tuple h with StructType
+
+#     if state.exists:
+#         raw_history = state.get()["history"]
+#         history = [
+#             {"ts": h[0], "value": h[1]}
+#             for h in raw_history
+#         ]
+#     else:
+#         history = []
+
+#     THREE_HOURS = 30 * 60  # 30 minutes for testing
+#     # THREE_HOURS = 3 * 60 * 60  # seconds
+
+#     for pdf in pdf_iter:
+#         outputs = []
+
+#         # Ensure sorted by event time
+#         pdf = pdf.sort_values("event_ts")
+
+#         for _, row in pdf.iterrows():
+#             current_ts = row["event_ts"]
+#             val = row["price"]   # IMPORTANT: your column is "price"
+
+#             # 1. Add new event
+#             history.append({"ts": current_ts, "value": val})
+
+#             # 2. Evict old events
+#             history = [
+#                 h for h in history
+#                 if (current_ts - h["ts"]).total_seconds() <= THREE_HOURS
+#             ]
+
+#             values = [h["value"] for h in history]
+
+#             if len(values) > 1:
+#                 mean = sum(values) / len(values)
+#                 variance = sum((v - mean) ** 2 for v in values) / len(values)
+#                 std = math.sqrt(variance)
+
+#                 is_anomaly = std > 0 and abs(val - mean) > Z_SCORE_THRESHOLD * std
+#             else:
+#                 mean = val
+#                 std = 0.0
+#                 is_anomaly = False
+
+#             outputs.append({
+#                 "id": user_id,
+#                 "event_ts": current_ts,
+#                 "value": val,
+#                 "mean": mean,
+#                 "std": std,
+#                 "is_anomaly": is_anomaly
+#             })
+
+#         # Emit batch
+#         yield pd.DataFrame(outputs)
+
+#     # Update state
+#     state.update({"history": history})
+
+#     # set timeout based on latest event time seen
+#     state.setTimeoutTimestamp(int(current_ts.timestamp() * 1000) + 3 * 60 * 60 * 1000)
 
 
 def build_stream(spark, out_path, ckpt_path):
