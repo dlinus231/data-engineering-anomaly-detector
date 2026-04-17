@@ -34,122 +34,131 @@ def update_state(key, pdf_iter, state):
     # -----------------------------------
     # 0. Handle timeout safely
     # -----------------------------------
-    if state.hasTimedOut:
-        state.remove()
-        return
+    try:
+        if state.hasTimedOut:
+            state.remove()
+            return
 
-    Z_SCORE_THRESHOLD = 1.5
-    user_id = key[0]
+        Z_SCORE_THRESHOLD = 1.5
+        user_id = key[0]
 
-    # -----------------------------------
-    # 1. Load state (keep as tuples)
-    # -----------------------------------
-    if state.exists:
+        # -----------------------------------
+        # 1. Load state (keep as tuples)
+        # -----------------------------------
+        if state.exists:
+            raw_state = state.get()
+            print("STATE RAW:", raw_state)
+            print("STATE TYPE:", type(raw_state))
+
+            raw_history = raw_state["history"]
+            print("HISTORY TYPE:", type(raw_history))
+            print("HISTORY SAMPLE:", raw_history[:3] if raw_history else "EMPTY")
+
+            for i, h in enumerate(raw_history[:3]):
+                print(f"h[{i}] TYPE:", type(h))
+                try:
+                    print(f"h[{i}] VALUE:", h)
+                except Exception as e:
+                    print(f"h[{i}] ERROR PRINTING:", e)
+            history = list(state.get()["history"])  # already tuple/Row-like
+        else:
+            history = []
+
+        THREE_HOURS = 30 * 60  # 30 minutes for testing
+
+        # Track last timestamp safely
+        latest_ts = None
+
+        # -----------------------------------
+        # 2. Process incoming data
+        # -----------------------------------
+        for pdf in pdf_iter:
+            outputs = []
+
+            if pdf.empty:
+                continue  # avoid edge-case crashes
+
+            pdf = pdf.sort_values("event_ts")
+
+            for _, row in pdf.iterrows():
+                current_ts = row["event_ts"]
+                val = row["price"]
+                latest_ts = current_ts  # track safely
+
+                # -----------------------------------
+                # 3. Add new event (tuple!)
+                # -----------------------------------
+                history.append((current_ts, val))
+
+                # -----------------------------------
+                # 4. Evict old events
+                # -----------------------------------
+                history = [
+                    h for h in history
+                    if (current_ts - h[0]).total_seconds() <= THREE_HOURS
+                ]
+
+                # -----------------------------------
+                # 5. Compute stats
+                # -----------------------------------
+                values = [h[1] for h in history]
+
+                if len(values) > 1:
+                    mean = sum(values) / len(values)
+                    variance = sum((v - mean) ** 2 for v in values) / len(values)
+                    std = math.sqrt(variance)
+
+                    is_anomaly = std > 0 and abs(val - mean) > Z_SCORE_THRESHOLD * std
+                else:
+                    mean = val
+                    std = 0.0
+                    is_anomaly = False
+
+                # -----------------------------------
+                # 6. Append output
+                # -----------------------------------
+                outputs.append({
+                    "id": user_id,
+                    "event_ts": current_ts,
+                    "value": val,
+                    "mean": mean,
+                    "std": std,
+                    "is_anomaly": is_anomaly
+                })
+
+            if outputs:
+                yield pd.DataFrame(outputs)
+
+        # -----------------------------------
+        # 8. Update state
+        # -----------------------------------
+        print("UPDATING STATE WITH:")
+        print("history type:", type(history))
+        print("history sample:", history[:3] if history else "EMPTY")
+
+        for i, h in enumerate(history[:3]):
+            print(f"OUT h[{i}] TYPE:", type(h), "VALUE:", h)
+            print("TS TYPE:", type(h[0]), "VALUE TYPE:", type(h[1]))
+        state.update({"history": history})
+
+        # -----------------------------------
+        # 9. Set timeout safely
+        # -----------------------------------
+        if latest_ts is not None:
+            state.setTimeoutTimestamp(
+                int(latest_ts.timestamp() * 1000) + 3 * 60 * 60 * 1000
+            )
+    except Exception as e:
+        print("ERROR in update_state", e)
+        traceback.print_exc()
         raw_state = state.get()
         print("STATE RAW:", raw_state)
         print("STATE TYPE:", type(raw_state))
-
-        raw_history = raw_state["history"]
-        print("HISTORY TYPE:", type(raw_history))
-        print("HISTORY SAMPLE:", raw_history[:3] if raw_history else "EMPTY")
-
-        for i, h in enumerate(raw_history[:3]):
-            print(f"h[{i}] TYPE:", type(h))
-            try:
-                print(f"h[{i}] VALUE:", h)
-            except Exception as e:
-                print(f"h[{i}] ERROR PRINTING:", e)
-        history = list(state.get()["history"])  # already tuple/Row-like
-    else:
-        history = []
-
-    THREE_HOURS = 30 * 60  # 30 minutes for testing
-
-    # Track last timestamp safely
-    latest_ts = None
-
-    # -----------------------------------
-    # 2. Process incoming data
-    # -----------------------------------
-    for pdf in pdf_iter:
-        outputs = []
-
-        if pdf.empty:
-            continue  # avoid edge-case crashes
-
-        pdf = pdf.sort_values("event_ts")
-
-        for _, row in pdf.iterrows():
-            current_ts = row["event_ts"]
-            val = row["price"]
-            latest_ts = current_ts  # track safely
-
-            # -----------------------------------
-            # 3. Add new event (tuple!)
-            # -----------------------------------
-            history.append((current_ts, val))
-
-            # -----------------------------------
-            # 4. Evict old events
-            # -----------------------------------
-            history = [
-                h for h in history
-                if (current_ts - h[0]).total_seconds() <= THREE_HOURS
-            ]
-
-            # -----------------------------------
-            # 5. Compute stats
-            # -----------------------------------
-            values = [h[1] for h in history]
-
-            if len(values) > 1:
-                mean = sum(values) / len(values)
-                variance = sum((v - mean) ** 2 for v in values) / len(values)
-                std = math.sqrt(variance)
-
-                is_anomaly = std > 0 and abs(val - mean) > Z_SCORE_THRESHOLD * std
-            else:
-                mean = val
-                std = 0.0
-                is_anomaly = False
-
-            # -----------------------------------
-            # 6. Append output
-            # -----------------------------------
-            outputs.append({
-                "id": user_id,
-                "event_ts": current_ts,
-                "value": val,
-                "mean": mean,
-                "std": std,
-                "is_anomaly": is_anomaly
-            })
-
-        # -----------------------------------
-        # 7. Emit batch output
-        # -----------------------------------
-        if outputs:
-            yield pd.DataFrame(outputs)
-
-    # -----------------------------------
-    # 8. Update state
-    # -----------------------------------
-    print("UPDATING STATE WITH:")
-    print("history type:", type(history))
-    print("history sample:", history[:3] if history else "EMPTY")
-
-    for i, h in enumerate(history[:3]):
-        print(f"OUT h[{i}] TYPE:", type(h), "VALUE:", h)
-        print("TS TYPE:", type(h[0]), "VALUE TYPE:", type(h[1]))
-    state.update({"history": history})
-
-    # -----------------------------------
-    # 9. Set timeout safely
-    # -----------------------------------
-    if latest_ts is not None:
-        state.setTimeoutTimestamp(
-            int(latest_ts.timestamp() * 1000) + 3 * 60 * 60 * 1000
-        )
+        print("history type:", type(history))
+        print("history sample:", history[:3] if history else "EMPTY")
+        for i, h in enumerate(history[:3]):
+            print(f"OUT h[{i}] TYPE:", type(h), "VALUE:", h)
+            print("TS TYPE:", type(h[0]), "VALUE TYPE:", type(h[1]))
         
 # def update_state(key, pdf_iter, state):
 #     if state.hasTimedOut:
@@ -320,13 +329,13 @@ def build_stream(spark, out_path, ckpt_path):
         )
     ])
 
-    # result_df = watermarked_df.groupBy("id").applyInPandasWithState(
-    #     update_state,
-    #     outputStructType=result_schema,
-    #     stateStructType=state_schema,
-    #     outputMode="append",
-    #     timeoutConf="EventTimeTimeout"
-    # )
+    result_df = watermarked_df.groupBy("id").applyInPandasWithState(
+        update_state,
+        outputStructType=result_schema,
+        stateStructType=state_schema,
+        outputMode="append",
+        timeoutConf="EventTimeTimeout"
+    )
 
     # -----------------------------------
     # 6. Split outputs
@@ -335,7 +344,7 @@ def build_stream(spark, out_path, ckpt_path):
     # raw_df = raw_df.withColumn("event_dt", to_date("event_ts"))
 
     # alerts_df = result_df.filter(col("is_anomaly") == True)
-    alerts_df = parsed_df # for now, push all records through
+    alerts_df = result_df # for now, push all records through
     alerts_df = alerts_df.withColumn("event_dt", to_date("event_ts"))
 
     # -----------------------------------
