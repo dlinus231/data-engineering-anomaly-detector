@@ -35,8 +35,19 @@ def update_state(key, pdf_iter, state):
     user_id = key[0]
 
     # Load existing state
+    # if state.exists:
+    #     history = state.get()["history"]
+    # else:
+    #     history = []
+
     if state.exists:
-        history = state.get()["history"]
+        raw_history = state.get()["history"]
+        history = [
+            {"ts": h["ts"], "value": h["value"]}  # works for Row
+            # OR safer:
+            # {"ts": h[0], "value": h[1]} if tuple issues persist
+            for h in raw_history
+        ]
     else:
         history = []
 
