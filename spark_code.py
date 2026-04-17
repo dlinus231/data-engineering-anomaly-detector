@@ -257,6 +257,7 @@ def build_stream(spark, out_path, ckpt_path):
         .format("csv") \
         .option("path", raw_output_path) \
         .option("checkpointLocation", raw_output_checkpoint_path) \
+        .option("header", "true") \
         .partitionBy("event_dt") \
         .outputMode("append") \
         .start()
