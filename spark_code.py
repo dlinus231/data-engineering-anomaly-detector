@@ -39,13 +39,12 @@ def update_state(key, pdf_iter, state):
     #     history = state.get()["history"]
     # else:
     #     history = []
+    # TODO: unexpected tuple h with StructType
 
     if state.exists:
         raw_history = state.get()["history"]
         history = [
-            {"ts": h["ts"], "value": h["value"]}  # works for Row
-            # OR safer:
-            # {"ts": h[0], "value": h[1]} if tuple issues persist
+            {"ts": h[0], "value": h[1]}
             for h in raw_history
         ]
     else:
