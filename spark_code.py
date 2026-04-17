@@ -1,6 +1,14 @@
 from pyspark.sql import SparkSession
 from pyspark.sql.window import Window
-from pyspark.sql.functions import col, from_json, to_timestamp, window, current_timestamp, to_date, avg, variance, when, count, struct
+from pyspark.sql.functions import (
+    col, from_json, 
+    to_timestamp, window, 
+    current_timestamp, to_date, 
+    avg, variance, 
+    when, count, 
+    struct, sha2,
+    concat_ws
+)
 from pyspark.sql.types import (
     StructType, StructField,
     IntegerType, StringType,
@@ -169,31 +177,27 @@ def build_stream(spark, out_path, ckpt_path):
     parsed_df = kafka_df.select(
         from_json(col("value").cast("string"), schema).alias("data")
     ).select(
-        col("data.id"),
-        col("data.name"),
-        col("data.symbol"),
+        col("data.id").alias("id"),
+        col("data.name").alias("name"),
+        col("data.symbol").alias("symbol"),
 
         col("data.price").alias("price"),
         col("data.last_updated").alias("event_ts"),
-        col("data.volume_24h"),
-        col("data.volume_change_24h"),
-        col("data.percent_change_1h"),
-        col("data.percent_change_24h"),
-
+        col("data.volume_24h").alias("volume_24h"),
+        col("data.volume_change_24h").alias("volume_change_24h"),
+        col("data.percent_change_1h").alias("percent_change_1h"),
+        col("data.percent_change_24h").alias("percent_change_24h"),
         current_timestamp().alias("processing_time")
     )
 
-    # console_write_stream = parsed_df.writeStream \
-    #     .format("console") \
-    #     .outputMode("update") \
-    #     .start()
-
-    # try:
-    #     console_write_stream.awaitTermination()
-    # except KeyboardInterrupt:
-    #     console_write_stream.stop()
-    # finally:
-    #     spark.stop()
+    # add a unique identifier for alert records to reference
+    parsed_df = parsed_df.withColumn(
+        "event_id", 
+        sha2(
+            concat_ws("||", col("id"), col("price"), col("event_ts")), 
+            256
+        )
+    )
 
     # -----------------------------------
     # 4. Add watermark (for state cleanup)
@@ -233,8 +237,8 @@ def build_stream(spark, out_path, ckpt_path):
     # -----------------------------------
     # 6. Split outputs
     # -----------------------------------
-    # raw_df = parsed_df
-    # raw_df = raw_df.withColumn("event_dt", to_date("event_ts"))
+    raw_df = parsed_df
+    raw_df = raw_df.withColumn("event_dt", to_date("event_ts"))
 
     # alerts_df = result_df.filter(col("is_anomaly") == True)
     alerts_df = result_df # for now, push all records through
@@ -249,26 +253,27 @@ def build_stream(spark, out_path, ckpt_path):
     alert_path = out_path + "/raw_alert"
     alert_checkpoint_path = ckpt_path + "/raw_alert"
 
-    # raw_query = raw_df.writeStream \
-    #     .format("csv") \
-    #     .option("path", raw_output_path) \
-    #     .option("checkpointLocation", raw_output_checkpoint_path) \
-    #     .partitionBy("event_dt") \
-    #     .outputMode("append") \
-    #     .start()
-
-    # -----------------------------------
-    # 8. Write alerts to CSV
-    # -----------------------------------
-    alerts_query = alerts_df.writeStream \
+    raw_query = raw_df.writeStream \
         .format("csv") \
-        .option("path", alert_path) \
-        .option("checkpointLocation", alert_checkpoint_path) \
+        .option("path", raw_output_path) \
+        .option("checkpointLocation", raw_output_checkpoint_path) \
         .partitionBy("event_dt") \
         .outputMode("append") \
         .start()
 
-    return [alerts_query]
+    # -----------------------------------
+    # 8. Write alerts to CSV
+    # -----------------------------------
+    # alerts_query = alerts_df.writeStream \
+    #     .format("csv") \
+    #     .option("path", alert_path) \
+    #     .option("checkpointLocation", alert_checkpoint_path) \
+    #     .partitionBy("event_dt") \
+    #     .outputMode("append") \
+    #     .start()
+
+    return [raw_query]
+    # return [alerts_query]
     # return [raw_query, alerts_query]
 
 def main():
