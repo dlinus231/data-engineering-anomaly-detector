@@ -282,7 +282,7 @@ def build_stream(spark, out_path, ckpt_path):
             .save(alert_path)
 
     raw_query = raw_df.writeStream \
-        .forEachBatch(write_raw) \
+        .foreachBatch(write_raw) \
         .option("checkpointLocation", raw_output_checkpoint_path) \
         .trigger(processingTime="1 minute") \
         .start()
@@ -291,7 +291,7 @@ def build_stream(spark, out_path, ckpt_path):
     # 8. Write alerts_df (anomaly detection output) to CSV
     # -----------------------------------
     alerts_query = alerts_df.writeStream \
-        .forEachBatch(write_alerts) \
+        .foreachBatch(write_alerts) \
         .option("checkpointLocation", alert_checkpoint_path) \
         .trigger(processingTime="1 minute") \
         .start()
