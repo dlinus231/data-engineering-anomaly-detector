@@ -47,7 +47,7 @@ def update_state(key, pdf_iter, state):
         state.remove()
         return
 
-    Z_SCORE_THRESHOLD = 1.5
+    Z_SCORE_THRESHOLD = 0.2
     user_id = key[0]
 
     # -----------------------------------
@@ -59,7 +59,7 @@ def update_state(key, pdf_iter, state):
     # Store history entries as plain tuples (ts, value) matching schema
     # field order so state.update() serializes them without ambiguity.
     if state.exists:
-        history = [(h[0], h[1]) for h in state.get()[0]]  # [0] = first schema field (history)
+        history = [(h[0], h[1]) for h in state.get[0]]  # [0] = first schema field (history)
     else:
         history = []
 
@@ -250,8 +250,8 @@ def build_stream(spark, out_path, ckpt_path):
     raw_df = parsed_df
     raw_df = raw_df.withColumn("event_dt", to_date("event_ts"))
 
-    # alerts_df = result_df.filter(col("is_anomaly") == True)
-    alerts_df = result_df # for now, push all records through
+    alerts_df = result_df.filter(col("is_anomaly") == True)
+    # alerts_df = result_df # for now, push all records through
     alerts_df = alerts_df.withColumn("event_dt", to_date("event_ts"))
 
     # -----------------------------------
