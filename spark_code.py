@@ -53,11 +53,13 @@ def update_state(key, pdf_iter, state):
     # -----------------------------------
     # 1. Load state
     # -----------------------------------
+    # applyInPandasWithState uses tuple-based state conventions:
+    #   - state.get() returns a Row (tuple subclass); access fields by position
+    #   - nested struct elements in an ArrayType are also Rows (tuples)
+    # Store history entries as plain tuples (ts, value) matching schema
+    # field order so state.update() serializes them without ambiguity.
     if state.exists:
-        # state.get()["history"] returns Row objects (PySpark's named tuples).
-        # Row is a tuple subclass, so passing them back into state.update() triggers
-        # UNEXPECTED_TUPLE_WITH_STRUCT. Normalize to plain dicts immediately.
-        history = [{"ts": h["ts"], "value": h["value"]} for h in state.get()["history"]]
+        history = [(h[0], h[1]) for h in state.get()[0]]  # [0] = first schema field (history)
     else:
         history = []
 
@@ -82,21 +84,20 @@ def update_state(key, pdf_iter, state):
             val = row["price"]
             latest_ts = current_ts  # track safely
 
-            # history.append((current_ts, val))
-            history.append({"ts": current_ts, "value": float(val)})
+            history.append((current_ts, float(val)))  # (ts, value) matching nested StructType field order
 
             # -----------------------------------
             # 4. Evict old events
             # -----------------------------------
             history = [
                 h for h in history
-                if (current_ts - h['ts']).total_seconds() <= THREE_HOURS
+                if (current_ts - h[0]).total_seconds() <= THREE_HOURS  # h[0] = ts
             ]
 
             # -----------------------------------
             # 5. Compute stats
             # -----------------------------------
-            values = [h['value'] for h in history]
+            values = [h[1] for h in history]  # h[1] = value
 
             if len(values) > 1: # TODO: this should depend on the window size, e.g. should be smth like: values >= (window_length_mins // 5 - 1)
                 mean = sum(values) / len(values)
@@ -129,7 +130,7 @@ def update_state(key, pdf_iter, state):
     # -----------------------------------
     # 8. Update state
     # -----------------------------------
-    state.update({"history": history})
+    state.update((history,))  # tuple: one element per state schema field, in order
 
     # -----------------------------------
     # 9. Set timeout safely
@@ -282,7 +283,7 @@ def build_stream(spark, out_path, ckpt_path):
             .save(alert_path)
 
     raw_query = raw_df.writeStream \
-        .foreachBatch(write_raw) \
+        .forEachBatch(write_raw) \
         .option("checkpointLocation", raw_output_checkpoint_path) \
         .trigger(processingTime="1 minute") \
         .start()
@@ -291,7 +292,7 @@ def build_stream(spark, out_path, ckpt_path):
     # 8. Write alerts_df (anomaly detection output) to CSV
     # -----------------------------------
     alerts_query = alerts_df.writeStream \
-        .foreachBatch(write_alerts) \
+        .forEachBatch(write_alerts) \
         .option("checkpointLocation", alert_checkpoint_path) \
         .trigger(processingTime="1 minute") \
         .start()
