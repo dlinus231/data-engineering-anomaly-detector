@@ -54,7 +54,7 @@ def update_state(key, pdf_iter, state):
     # 1. Load state (keep as tuples)
     # -----------------------------------
     if state.exists:
-        history = list(state.get()["history"])
+        history = [{"ts": h["ts"], "value": h["value"]} for h in state.get()["history"]]
     else:
         history = []
 
@@ -95,7 +95,7 @@ def update_state(key, pdf_iter, state):
             # -----------------------------------
             values = [h['value'] for h in history]
 
-            if len(values) > 1:
+            if len(values) > 1: # TODO: this should depend on the window size, e.g. should be smth like: values >= (window_length_mins // 5 - 1)
                 mean = sum(values) / len(values)
                 variance = sum((v - mean) ** 2 for v in values) / len(values)
                 std = math.sqrt(variance)
