@@ -99,12 +99,13 @@ def update_state(key, pdf_iter, state):
                 mean = sum(values) / len(values)
                 variance = sum((v - mean) ** 2 for v in values) / len(values)
                 std = math.sqrt(variance)
-
-                is_anomaly = std > 0 and abs(val - mean) > Z_SCORE_THRESHOLD * std
+                z_score = std > 0 and abs(val - mean)
+                is_anomaly = z_score > Z_SCORE_THRESHOLD * std
             else:
                 mean = val
                 std = 0.0
                 is_anomaly = False
+                z_score = None
 
             # -----------------------------------
             # 6. Append output
@@ -115,7 +116,8 @@ def update_state(key, pdf_iter, state):
                 "value": val,
                 "mean": mean,
                 "std": std,
-                "is_anomaly": is_anomaly
+                "is_anomaly": is_anomaly,
+                "z_score": z_score
             })
 
         if outputs:
@@ -215,7 +217,8 @@ def build_stream(spark, out_path, ckpt_path):
         StructField("value", DoubleType()),
         StructField("mean", DoubleType()),
         StructField("std", DoubleType()),
-        StructField("is_anomaly", BooleanType())
+        StructField("is_anomaly", BooleanType()),
+        StructField("z_score", DoubleType())
     ])
     state_schema = StructType([
         StructField(
