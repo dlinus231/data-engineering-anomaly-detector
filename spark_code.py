@@ -254,17 +254,18 @@ def build_stream(spark, out_path, ckpt_path):
     alerts_df = alerts_df.withColumn("event_dt", to_date("event_ts"))
 
     # -----------------------------------
-    # 7. Write raw data to CSV
+    # 7. Write raw events and alerts to CSV
+    #
+    # forEachBatch is bound to a single streaming DataFrame, so raw_df and
+    # alerts_df each need their own writeStream query with separate checkpoints.
     # -----------------------------------
     raw_output_path = out_path + "/raw_output"
     raw_output_checkpoint_path = ckpt_path + "/raw_output"
 
-    alert_path = out_path + "/raw_alert"
-    alert_checkpoint_path = ckpt_path + "/raw_alert"
+    alert_path = out_path + "/alerts"
+    alert_checkpoint_path = ckpt_path + "/alerts"
 
-    def write_raw_and_alerts(batch_df, batch_id):
-        # batch_df.persist() # check if this makes sense?
-
+    def write_raw(batch_df, batch_id):
         batch_df.write \
             .format("csv") \
             .mode("append") \
@@ -272,46 +273,30 @@ def build_stream(spark, out_path, ckpt_path):
             .partitionBy("event_dt") \
             .save(raw_output_path)
 
-        # -----------------------------------
-        # Write alerts (same as alerts_query)
-        # -----------------------------------
-        # TODO: add logic to properly create alerts_batch_df from the batch_df (which is just the raw_df)
-        alerts_batch_df = batch_df.filter(col("id") == 1)  # adjust condition if needed
-
-        alerts_batch_df.write \
+    def write_alerts(batch_df, batch_id):
+        batch_df.write \
             .format("csv") \
             .mode("append") \
+            .option("header", "true") \
             .partitionBy("event_dt") \
             .save(alert_path)
 
-    combined_query = raw_df.writeStream \
-        .forEachBatch(write_raw_and_alerts) \
+    raw_query = raw_df.writeStream \
+        .forEachBatch(write_raw) \
         .option("checkpointLocation", raw_output_checkpoint_path) \
         .trigger(processingTime="1 minute") \
         .start()
-    # raw_query = raw_df.writeStream \
-    #     .format("csv") \
-    #     .option("path", raw_output_path) \
-    #     .option("header", "true") \
-    #     .trigger(processingTime='1 minute') \
-    #     .partitionBy("event_dt") \
-    #     .outputMode("append") \
-    #     .start()
 
     # -----------------------------------
-    # 8. Write alerts to CSV
+    # 8. Write alerts_df (anomaly detection output) to CSV
     # -----------------------------------
-    # alerts_query = alerts_df.writeStream \
-    #     .format("csv") \
-    #     .option("path", alert_path) \
-    #     .option("checkpointLocation", alert_checkpoint_path) \
-    #     .partitionBy("event_dt") \
-    #     .outputMode("append") \
-    #     .start()
+    alerts_query = alerts_df.writeStream \
+        .forEachBatch(write_alerts) \
+        .option("checkpointLocation", alert_checkpoint_path) \
+        .trigger(processingTime="1 minute") \
+        .start()
 
-    return [combined_query]
-    # return [alerts_query]
-    # return [raw_query, alerts_query]
+    return [raw_query, alerts_query]
 
 def main():
     spark_session = create_spark_session()
