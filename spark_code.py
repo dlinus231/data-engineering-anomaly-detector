@@ -51,9 +51,12 @@ def update_state(key, pdf_iter, state):
     user_id = key[0]
 
     # -----------------------------------
-    # 1. Load state (keep as tuples)
+    # 1. Load state
     # -----------------------------------
     if state.exists:
+        # state.get()["history"] returns Row objects (PySpark's named tuples).
+        # Row is a tuple subclass, so passing them back into state.update() triggers
+        # UNEXPECTED_TUPLE_WITH_STRUCT. Normalize to plain dicts immediately.
         history = [{"ts": h["ts"], "value": h["value"]} for h in state.get()["history"]]
     else:
         history = []
@@ -99,13 +102,13 @@ def update_state(key, pdf_iter, state):
                 mean = sum(values) / len(values)
                 variance = sum((v - mean) ** 2 for v in values) / len(values)
                 std = math.sqrt(variance)
-                z_score = std > 0 and abs(val - mean)
-                is_anomaly = z_score > Z_SCORE_THRESHOLD * std
+                z_score = abs(val - mean) / std if std > 0 else 0.0
+                is_anomaly = z_score > Z_SCORE_THRESHOLD
             else:
                 mean = val
                 std = 0.0
                 is_anomaly = False
-                z_score = None
+                z_score = 0.0
 
             # -----------------------------------
             # 6. Append output
