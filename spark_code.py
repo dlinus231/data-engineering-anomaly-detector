@@ -286,7 +286,10 @@ def build_stream(spark, out_path, ckpt_path):
             .save(raw_output_path)
 
     def write_alerts(batch_df, batch_id):
-        batch_df.coalesce(1).write \
+        batch_df \
+            .orderBy(col("id").asc(), col("z_score").desc()) \
+            .coalesce(1) \
+            .write \
             .format("csv") \
             .mode("append") \
             .option("header", "true") \
