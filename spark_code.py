@@ -63,7 +63,7 @@ def update_state(key, pdf_iter, state):
     else:
         history = []
 
-    THREE_HOURS = 30 * 60  # 30 minutes for testing
+    THREE_HOURS = 3 * 60 * 60  # 30 minutes for testing
 
     # Track last timestamp safely
     latest_ts = None
@@ -100,7 +100,7 @@ def update_state(key, pdf_iter, state):
             # -----------------------------------
             # 5. Compute stats on historical metrics (excluding current data point)
             # -----------------------------------
-            if len(historical_prices) > 5: # TODO: this should depend on the window size, e.g. should be smth like: historical_prices >= (window_length_mins // 5 - 1)
+            if len(historical_prices) > 30: # TODO: this should depend on the window size, e.g. should be smth like: historical_prices >= (window_length_mins // 5 - 1)
                 mean = sum(historical_prices) / len(historical_prices)
                 variance = sum((v - mean) ** 2 for v in historical_prices) / len(historical_prices)
                 std = math.sqrt(variance)
