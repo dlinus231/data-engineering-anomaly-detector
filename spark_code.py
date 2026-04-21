@@ -47,7 +47,7 @@ def update_state(key, pdf_iter, state):
         state.remove()
         return
 
-    Z_SCORE_THRESHOLD = 0.2
+    Z_SCORE_THRESHOLD = 2.5
     user_id = key[0]
 
     # -----------------------------------
@@ -82,9 +82,8 @@ def update_state(key, pdf_iter, state):
         for _, row in pdf.iterrows():
             current_ts = row["event_ts"]
             val = row["price"]
+            event_id = row["event_id"]
             latest_ts = current_ts  # track safely
-
-            history.append((current_ts, float(val)))  # (ts, value) matching nested StructType field order
 
             # -----------------------------------
             # 4. Evict old events
@@ -93,36 +92,43 @@ def update_state(key, pdf_iter, state):
                 h for h in history
                 if (current_ts - h[0]).total_seconds() <= THREE_HOURS  # h[0] = ts
             ]
+            
+            historical_timestamps, historical_prices = zip(*history) if history else ([], [])
+
+            history.append((current_ts, float(val)))  # (ts, value) matching nested StructType field order
 
             # -----------------------------------
-            # 5. Compute stats
+            # 5. Compute stats on historical metrics (excluding current data point)
             # -----------------------------------
-            values = [h[1] for h in history]  # h[1] = value
-
-            if len(values) > 1: # TODO: this should depend on the window size, e.g. should be smth like: values >= (window_length_mins // 5 - 1)
-                mean = sum(values) / len(values)
-                variance = sum((v - mean) ** 2 for v in values) / len(values)
+            if len(historical_prices) > 5: # TODO: this should depend on the window size, e.g. should be smth like: historical_prices >= (window_length_mins // 5 - 1)
+                mean = sum(historical_prices) / len(historical_prices)
+                variance = sum((v - mean) ** 2 for v in historical_prices) / len(historical_prices)
                 std = math.sqrt(variance)
                 z_score = abs(val - mean) / std if std > 0 else 0.0
                 is_anomaly = z_score > Z_SCORE_THRESHOLD
-            else:
-                mean = val
-                std = 0.0
-                is_anomaly = False
-                z_score = 0.0
 
-            # -----------------------------------
-            # 6. Append output
-            # -----------------------------------
-            outputs.append({
-                "id": user_id,
-                "event_ts": current_ts,
-                "value": val,
-                "mean": mean,
-                "std": std,
-                "is_anomaly": is_anomaly,
-                "z_score": z_score
-            })
+                # -----------------------------------
+                # 6. Append output and history if anomalous
+                # -----------------------------------
+                if is_anomaly:
+                    outputs.append({
+                        "id": user_id,
+                        "event_id": event_id,
+                        "event_ts": current_ts,
+                        "curr_price": val,
+                        "past_prices": historical_prices,
+                        "past_timestamps": historical_timestamps,
+                        "mean": mean,
+                        "std": std,
+                        "is_anomaly": is_anomaly,
+                        "z_score": z_score
+                    })
+            # else:
+            #     mean = val
+            #     std = 0.0
+            #     is_anomaly = False
+            #     z_score = 0.0
+
 
         if outputs:
             yield pd.DataFrame(outputs)
@@ -217,8 +223,11 @@ def build_stream(spark, out_path, ckpt_path):
     # TODO: Define schema for result
     result_schema = StructType([
         StructField("id", IntegerType()),
+        StructField("event_id", StringType()),
         StructField("event_ts", TimestampType()),
-        StructField("value", DoubleType()),
+        StructField("curr_price", DoubleType()),
+        StructField("past_prices", ArrayType(DoubleType())),
+        StructField("past_timestamps", ArrayType(TimestampType())),
         StructField("mean", DoubleType()),
         StructField("std", DoubleType()),
         StructField("is_anomaly", BooleanType()),
@@ -242,7 +251,7 @@ def build_stream(spark, out_path, ckpt_path):
         stateStructType=state_schema,
         outputMode="append",
         timeoutConf="EventTimeTimeout"
-    )
+    ).withColumn("alert_id", col("event_id")) # link anomalies to the event which generated it
 
     # -----------------------------------
     # 6. Split outputs
