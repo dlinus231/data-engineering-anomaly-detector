@@ -263,7 +263,6 @@ def build_stream(spark, out_path, ckpt_path):
     raw_df = raw_df.withColumn("event_dt", to_date("event_ts"))
 
     alerts_df = result_df.filter(col("is_anomaly") == True)
-    # alerts_df = result_df # for now, push all records through
     alerts_df = alerts_df.withColumn("event_dt", to_date("event_ts"))
 
     # -----------------------------------
@@ -298,6 +297,7 @@ def build_stream(spark, out_path, ckpt_path):
         .foreachBatch(write_raw) \
         .option("checkpointLocation", raw_output_checkpoint_path) \
         .trigger(processingTime="1 minute") \
+        .coalesce(1) \
         .start()
 
     # -----------------------------------
@@ -307,6 +307,7 @@ def build_stream(spark, out_path, ckpt_path):
         .foreachBatch(write_alerts) \
         .option("checkpointLocation", alert_checkpoint_path) \
         .trigger(processingTime="1 minute") \
+        .coalesce(1) \
         .start()
 
     return [raw_query, alerts_query]
