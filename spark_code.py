@@ -278,21 +278,19 @@ def build_stream(spark, out_path, ckpt_path):
     alert_checkpoint_path = ckpt_path + "/alerts"
 
     def write_raw(batch_df, batch_id):
-        batch_df.write \
+        batch_df.coalesce(1).write \
             .format("csv") \
             .mode("append") \
             .option("header", "true") \
             .partitionBy("event_dt") \
-            .coalesce(1) \
             .save(raw_output_path)
 
     def write_alerts(batch_df, batch_id):
-        batch_df.write \
+        batch_df.coalesce(1).write \
             .format("csv") \
             .mode("append") \
             .option("header", "true") \
             .partitionBy("event_dt") \
-            .coalesce(1) \
             .save(alert_path)
 
     raw_query = raw_df.writeStream \
