@@ -47,7 +47,7 @@ def update_state(key, pdf_iter, state):
         state.remove()
         return
 
-    Z_SCORE_THRESHOLD = 2.5
+    Z_SCORE_THRESHOLD = 3.0
     user_id = key[0]
 
     # -----------------------------------
@@ -120,7 +120,6 @@ def update_state(key, pdf_iter, state):
                         "past_timestamps": historical_timestamps,
                         "mean": mean,
                         "std": std,
-                        "is_anomaly": is_anomaly,
                         "z_score": z_score
                     })
             # else:
@@ -230,7 +229,6 @@ def build_stream(spark, out_path, ckpt_path):
         StructField("past_timestamps", ArrayType(TimestampType())),
         StructField("mean", DoubleType()),
         StructField("std", DoubleType()),
-        StructField("is_anomaly", BooleanType()),
         StructField("z_score", DoubleType())
     ])
     state_schema = StructType([
