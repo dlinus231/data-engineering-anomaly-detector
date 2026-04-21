@@ -251,7 +251,10 @@ def build_stream(spark, out_path, ckpt_path):
         stateStructType=state_schema,
         outputMode="append",
         timeoutConf="EventTimeTimeout"
-    ).withColumn("alert_id", col("event_id")) # link anomalies to the event which generated it
+    ) \
+    .withColumn("past_prices", col("past_prices").cast("string")) \
+    .withColumn("past_timestamps", col("past_timestamps").cast("string")) \
+    .withColumn("alert_id", col("event_id"))
 
     # -----------------------------------
     # 6. Split outputs
