@@ -283,6 +283,7 @@ def build_stream(spark, out_path, ckpt_path):
             .mode("append") \
             .option("header", "true") \
             .partitionBy("event_dt") \
+            .coalesce(1) \
             .save(raw_output_path)
 
     def write_alerts(batch_df, batch_id):
@@ -291,13 +292,13 @@ def build_stream(spark, out_path, ckpt_path):
             .mode("append") \
             .option("header", "true") \
             .partitionBy("event_dt") \
+            .coalesce(1) \
             .save(alert_path)
 
     raw_query = raw_df.writeStream \
         .foreachBatch(write_raw) \
         .option("checkpointLocation", raw_output_checkpoint_path) \
         .trigger(processingTime="1 minute") \
-        .coalesce(1) \
         .start()
 
     # -----------------------------------
@@ -307,7 +308,6 @@ def build_stream(spark, out_path, ckpt_path):
         .foreachBatch(write_alerts) \
         .option("checkpointLocation", alert_checkpoint_path) \
         .trigger(processingTime="1 minute") \
-        .coalesce(1) \
         .start()
 
     return [raw_query, alerts_query]
