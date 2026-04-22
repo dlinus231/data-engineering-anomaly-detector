@@ -63,7 +63,7 @@ def update_state(key, pdf_iter, state):
     else:
         history = []
 
-    THREE_HOURS = 3 * 60 * 60  # 30 minutes for testing
+    THREE_HOURS_SECS = 3 * 60 * 60  # 30 minutes for testing
 
     # Track last timestamp safely
     latest_ts = None
@@ -90,7 +90,7 @@ def update_state(key, pdf_iter, state):
             # -----------------------------------
             history = [
                 h for h in history
-                if (current_ts - h[0]).total_seconds() <= THREE_HOURS  # h[0] = ts
+                if (current_ts - h[0]).total_seconds() <= THREE_HOURS_SECS  # h[0] = ts
             ]
             
             historical_timestamps, historical_prices = zip(*history) if history else ([], [])

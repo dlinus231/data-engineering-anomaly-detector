@@ -19,7 +19,7 @@ import json
 
 # ---- Config — update these before running ----
 OUTPUT_DIR = "/home/compute/d.linus/data-engineering-anomaly-detector/output"  # UPDATE THIS
-RSA_KEY_PATH = "/home/compute/d.linus/rsa_key.p8"  # UPDATE THIS
+RSA_KEY_PATH = "/home/compute/d.linus/.ssh/airflow_keys/rsa_key.p8"  # UPDATE THIS
 
 SNOWFLAKE_USER = "FALCON"
 SNOWFLAKE_ACCOUNT = "SFEDU02-UNB02139"
@@ -29,7 +29,7 @@ SNOWFLAKE_WAREHOUSE = "FALCON_WH"
 SNOWFLAKE_ROLE = "TRAINING_ROLE"
 
 # File to track which CSVs have already been loaded so we don't duplicate
-LOADED_FILES_TRACKER = "/home/compute/d.linus/airflow_loaded_files.json"  # UPDATE THIS
+LOADED_FILES_TRACKER = "/home/compute/d.linus/data-engineering-anomaly-detector/tracker/airflow_loaded_files.json"  # UPDATE THIS
 
 # Columns expected in each table (event_dt added from folder name)
 RAW_EVENTS_COLS = [
