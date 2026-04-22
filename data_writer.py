@@ -1,6 +1,7 @@
 from requests import Session
 from requests.exceptions import ConnectionError, Timeout, TooManyRedirects
-from kafka import KafkaProducer
+from confluent_kafka import Producer
+# from kafka import KafkaProducer
 from dotenv import load_dotenv
 import json
 import os
@@ -49,6 +50,34 @@ def extract_record(crypto_dict):
         'percent_change_24h': crypto_dict.get('quote', {}).get('USD', {}).get('percent_change_24h'),
     }
 
+def append_to_csv(json_obj, filePath="example_records.csv"):
+    import csv
+    fieldnames = [
+        'id', 
+        'name', 
+        'symbol',
+        'price',
+        'last_updated',
+        'volume_24h',
+        'volume_change_24h',
+        'percent_change_1h',
+        'percent_change_24h'
+    ]
+
+    file_exists = os.path.exists(filePath)
+    file_empty = (not file_exists) or os.path.getsize(filePath) == 0
+
+    with open(filePath, "a", newline="") as csvfile:  # append mode
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+
+        # Only write header if file is new or empty
+        if file_empty:
+            writer.writeheader()
+
+        for crypto_dict in json_obj['data']:
+            flattened_crypto_dict = extract_record(crypto_dict)
+            writer.writerow(flattened_crypto_dict)
+
 
 def publish_to_kafka(producer, json_obj, topic=KAFKA_TOPIC):
     """
@@ -62,11 +91,12 @@ def publish_to_kafka(producer, json_obj, topic=KAFKA_TOPIC):
 
         message_key = record['symbol'].encode('utf-8') if record.get('symbol') else None
 
-        producer.send(
-            topic,
-            key=message_key,
-            value=record
-        )
+        producer.produce(topic, key=message_key, value=json.dumps(record).encode('utf-8'))
+        # producer.send(
+        #     topic,
+        #     key=message_key,
+        #     value=record
+        # )
         records_sent += 1
 
     producer.flush()
@@ -75,15 +105,22 @@ def publish_to_kafka(producer, json_obj, topic=KAFKA_TOPIC):
 
 def create_producer():
     """Create and return a Confluent Cloud KafkaProducer instance."""
-    return KafkaProducer(
-        bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
-        security_protocol='SASL_SSL',
-        sasl_mechanism='PLAIN',
-        sasl_plain_username=KAFKA_API_KEY,
-        sasl_plain_password=KAFKA_API_SECRET,
-        value_serializer=lambda v: json.dumps(v).encode('utf-8'),
-        retries=3
-    )
+    return Producer({
+        'bootstrap.servers':KAFKA_BOOTSTRAP_SERVERS,
+        'security.protocol':'SASL_SSL',
+        'sasl.mechanisms':'PLAIN',
+        'sasl.username': KAFKA_API_KEY,
+        'sasl.password':KAFKA_API_SECRET
+    })
+    # return KafkaProducer(
+    #     bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
+    #     security_protocol='SASL_SSL',
+    #     sasl_mechanism='PLAIN',
+    #     sasl_plain_username=KAFKA_API_KEY,
+    #     sasl_plain_password=KAFKA_API_SECRET,
+    #     value_serializer=lambda v: json.dumps(v).encode('utf-8'),
+    #     retries=3
+    # )
 
 
 # Create the Kafka producer once outside the loop so we
@@ -98,7 +135,8 @@ while True:
         response = session.get(prod_url, params=parameters)
         json_obj = json.loads(response.text)
         publish_to_kafka(producer, json_obj)
-
+        # print("JSON", json_obj)
+        # append_to_csv(json_obj)
     except (ConnectionError, Timeout, TooManyRedirects) as e:
         print(f"API request failed: {e}")
     except Exception as e:
