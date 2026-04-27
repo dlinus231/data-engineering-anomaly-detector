@@ -15,7 +15,6 @@ from pyspark.sql.types import (
     DoubleType, TimestampType,
     BooleanType, ArrayType
 )
-# from pyspark.sql.streaming import GroupState, GroupStateTimeout
 
 import math
 from datetime import timedelta
@@ -23,9 +22,6 @@ from dotenv import load_dotenv
 import os
 import traceback
 import pandas as pd
-
-
-# continue from this chat: https://chatgpt.com/c/69e106f7-67f0-8332-a427-2fa286905ad1
 
 # -----------------------------------
 # 1. Spark session
@@ -294,18 +290,29 @@ def build_stream(spark, config):
     return [raw_query, alerts_query]
 
 def main():
+    load_dotenv()
+    config = {
+        "out_path":           os.getenv("OUT_PATH"),
+        "ckpt_path":          os.getenv("CKPT_PATH"),
+        "min_z_score":        float(os.getenv("MIN_Z_SCORE_FOR_ANOMALY", 2.0)),
+        "min_data_points":    int(os.getenv("MIN_DATA_POINTS", 10)),
+        "window_size_hours":  float(os.getenv("WINDOW_SIZE_HOURS", 1)),
+        "metric_column":      os.getenv("METRIC_COLUMN", "percent_change_1h"),
+        "timeout_hours":      float(os.getenv("TIMEOUT_HOURS", 1)),
+        "watermark_duration": os.getenv("WATERMARK_DURATION", "3 hours"),
+    }
+    
     spark_session = create_spark_session()
     print("spark_session_created")
     try:
         print("Trying build_stream()")
-        queries = build_stream(spark_session, "/home/compute/d.linus/data-engineering-anomaly-detector/output", "/home/compute/d.linus/data-engineering-anomaly-detector/checkpoints")
+        queries = build_stream(spark_session, config)
         for q in queries:
             q.awaitTermination()
-        print("Finished build_stream()")
     except KeyboardInterrupt:
         for q in queries:
             q.stop()
-        print("Exiting gracefully from keyboard interrupt")
+        print("Exited gracefully from keyboard interrupt")
     except Exception as e:
         print("Exception encountered")
         print(e)
