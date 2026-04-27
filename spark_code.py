@@ -228,7 +228,7 @@ def build_stream(spark, config):
             outputMode="append",
             timeoutConf="EventTimeTimeout"
         ) \
-        .withColumn("past_prices", col("past_vals").cast("string")) \
+        .withColumn("past_vals", col("past_vals").cast("string")) \
         .withColumn("past_timestamps", col("past_timestamps").cast("string")) \
         .withColumn("alert_id", col("event_id"))
 
