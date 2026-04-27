@@ -219,7 +219,6 @@ def build_stream(spark, config):
     ])
 
     result_df = watermarked_df \
-        .withWatermark("event_ts", watermark_duration) \
         .groupBy("id") \
         .applyInPandasWithState(
             update_state,
