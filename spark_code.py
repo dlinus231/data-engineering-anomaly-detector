@@ -47,7 +47,7 @@ def update_state(key, pdf_iter, state):
         state.remove()
         return
 
-    Z_SCORE_THRESHOLD = 3.0
+    Z_SCORE_THRESHOLD = 2.0
     user_id = key[0]
 
     # -----------------------------------
@@ -63,7 +63,7 @@ def update_state(key, pdf_iter, state):
     else:
         history = []
 
-    THREE_HOURS_SECS = 3 * 60 * 60  # 30 minutes for testing
+    ONE_HOUR_SECS = 1 * 60 * 60  # 1 hour
 
     # Track last timestamp safely
     latest_ts = None
@@ -81,7 +81,7 @@ def update_state(key, pdf_iter, state):
 
         for _, row in pdf.iterrows():
             current_ts = row["event_ts"]
-            val = row["price"]
+            val = row["percent_change_1h"]
             event_id = row["event_id"]
             latest_ts = current_ts  # track safely
 
@@ -90,7 +90,7 @@ def update_state(key, pdf_iter, state):
             # -----------------------------------
             history = [
                 h for h in history
-                if (current_ts - h[0]).total_seconds() <= THREE_HOURS_SECS  # h[0] = ts
+                if (current_ts - h[0]).total_seconds() <= ONE_HOUR_SECS  # h[0] = ts
             ]
             
             historical_timestamps, historical_prices = zip(*history) if history else ([], [])
@@ -100,7 +100,7 @@ def update_state(key, pdf_iter, state):
             # -----------------------------------
             # 5. Compute stats on historical metrics (excluding current data point)
             # -----------------------------------
-            if len(historical_prices) > 30: # TODO: this should depend on the window size, e.g. should be smth like: historical_prices >= (window_length_mins // 5 - 1)
+            if len(historical_prices) > 10:
                 mean = sum(historical_prices) / len(historical_prices)
                 variance = sum((v - mean) ** 2 for v in historical_prices) / len(historical_prices)
                 std = math.sqrt(variance)
@@ -122,11 +122,6 @@ def update_state(key, pdf_iter, state):
                         "std": std,
                         "z_score": z_score
                     })
-            # else:
-            #     mean = val
-            #     std = 0.0
-            #     is_anomaly = False
-            #     z_score = 0.0
 
 
         if outputs:
@@ -142,7 +137,7 @@ def update_state(key, pdf_iter, state):
     # -----------------------------------
     if latest_ts is not None:
         state.setTimeoutTimestamp(
-            int(latest_ts.timestamp() * 1000) + 3 * 60 * 60 * 1000
+            int(latest_ts.timestamp() * 1000) + 1 * 60 * 60 * 1000
         )
         
 
