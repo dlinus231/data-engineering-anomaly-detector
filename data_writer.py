@@ -141,5 +141,6 @@ while True:
         print(f"API request failed: {e}")
     except Exception as e:
         print(f"Unexpected error: {e}")
+        producer = create_producer()
 
     time.sleep(POLL_INTERVAL_SECONDS)

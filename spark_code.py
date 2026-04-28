@@ -15,7 +15,6 @@ from pyspark.sql.types import (
     DoubleType, TimestampType,
     BooleanType, ArrayType
 )
-# from pyspark.sql.streaming import GroupState, GroupStateTimeout
 
 import math
 from datetime import timedelta
@@ -23,9 +22,6 @@ from dotenv import load_dotenv
 import os
 import traceback
 import pandas as pd
-
-
-# continue from this chat: https://chatgpt.com/c/69e106f7-67f0-8332-a427-2fa286905ad1
 
 # -----------------------------------
 # 1. Spark session
@@ -38,117 +34,83 @@ def create_spark_session(app_name="anomaly-detector"):
     spark.conf.set("spark.sql.session.timeZone", "UTC")
     return spark
 
-# called once per key, where key here is a unique id for a crypto-coin
-def update_state(key, pdf_iter, state):
-    # -----------------------------------
-    # 0. Handle timeout safely
-    # -----------------------------------
-    if state.hasTimedOut:
-        state.remove()
-        return
+def make_update_state(min_z_score, min_data_points, window_size_hours, metric_column, timeout_hours):
+    """Factory that closes over config so applyInPandasWithState signature is unchanged."""
+    WINDOW_SIZE_IN_SECS = window_size_hours * 60 * 60
+    TIMEOUT_MS = int(timeout_hours * 60 * 60 * 1000)
 
-    Z_SCORE_THRESHOLD = 3.0
-    user_id = key[0]
+    def update_state(key, pdf_iter, state):
+        if state.hasTimedOut:
+            state.remove()
+            return
 
-    # -----------------------------------
-    # 1. Load state
-    # -----------------------------------
-    # applyInPandasWithState uses tuple-based state conventions:
-    #   - state.get() returns a Row (tuple subclass); access fields by position
-    #   - nested struct elements in an ArrayType are also Rows (tuples)
-    # Store history entries as plain tuples (ts, value) matching schema
-    # field order so state.update() serializes them without ambiguity.
-    if state.exists:
-        history = [(h[0], h[1]) for h in state.get[0]]  # [0] = first schema field (history)
-    else:
-        history = []
+        user_id = key[0]
 
-    THREE_HOURS_SECS = 3 * 60 * 60  # 30 minutes for testing
+        if state.exists:
+            history = [(h[0], h[1]) for h in state.get[0]]
+        else:
+            history = []
 
-    # Track last timestamp safely
-    latest_ts = None
+        latest_ts = None
 
-    # -----------------------------------
-    # 2. Process incoming data
-    # -----------------------------------
-    for pdf in pdf_iter: # each pandas_df is a different batch with rows for a given crypto-coin
-        outputs = []
+        for pdf in pdf_iter:
+            outputs = []
 
-        if pdf.empty:
-            continue  # avoid edge-case crashes
+            if pdf.empty:
+                continue
 
-        pdf = pdf.sort_values("event_ts")
+            pdf = pdf.sort_values("event_ts")
 
-        for _, row in pdf.iterrows():
-            current_ts = row["event_ts"]
-            val = row["price"]
-            event_id = row["event_id"]
-            latest_ts = current_ts  # track safely
+            for _, row in pdf.iterrows():
+                current_ts = row["event_ts"]
+                val = row[metric_column]
+                event_id = row["event_id"]
+                latest_ts = current_ts
 
-            # -----------------------------------
-            # 4. Evict old events
-            # -----------------------------------
-            history = [
-                h for h in history
-                if (current_ts - h[0]).total_seconds() <= THREE_HOURS_SECS  # h[0] = ts
-            ]
-            
-            historical_timestamps, historical_prices = zip(*history) if history else ([], [])
+                history = [
+                    h for h in history
+                    if (current_ts - h[0]).total_seconds() <= WINDOW_SIZE_IN_SECS
+                ]
 
-            history.append((current_ts, float(val)))  # (ts, value) matching nested StructType field order
+                historical_timestamps, historical_values = zip(*history) if history else ([], [])
+                history.append((current_ts, float(val)))
 
-            # -----------------------------------
-            # 5. Compute stats on historical metrics (excluding current data point)
-            # -----------------------------------
-            if len(historical_prices) > 30: # TODO: this should depend on the window size, e.g. should be smth like: historical_prices >= (window_length_mins // 5 - 1)
-                mean = sum(historical_prices) / len(historical_prices)
-                variance = sum((v - mean) ** 2 for v in historical_prices) / len(historical_prices)
-                std = math.sqrt(variance)
-                z_score = abs(val - mean) / std if std > 0 else 0.0
-                is_anomaly = z_score > Z_SCORE_THRESHOLD
+                if len(historical_values) > min_data_points:
+                    mean = sum(historical_values) / len(historical_values)
+                    variance = sum((v - mean) ** 2 for v in historical_values) / len(historical_values)
+                    std = math.sqrt(variance)
+                    z_score = abs(val - mean) / std if std > 0 else 0.0
+                    is_anomaly = z_score > min_z_score
 
-                # -----------------------------------
-                # 6. Append output and history if anomalous
-                # -----------------------------------
-                if is_anomaly:
-                    outputs.append({
-                        "id": user_id,
-                        "event_id": event_id,
-                        "event_ts": current_ts,
-                        "curr_price": val,
-                        "past_prices": historical_prices,
-                        "past_timestamps": historical_timestamps,
-                        "mean": mean,
-                        "std": std,
-                        "z_score": z_score
-                    })
-            # else:
-            #     mean = val
-            #     std = 0.0
-            #     is_anomaly = False
-            #     z_score = 0.0
+                    if is_anomaly:
+                        outputs.append({
+                            "id": user_id,
+                            "event_id": event_id,
+                            "event_ts": current_ts,
+                            "curr_val": val,
+                            "past_vals": historical_values,
+                            "column_name_for_val_tracked": metric_column,
+                            "past_timestamps": historical_timestamps,
+                            "mean": mean,
+                            "std": std,
+                            "z_score": z_score
+                        })
 
+            if outputs:
+                yield pd.DataFrame(outputs)
 
-        if outputs:
-            yield pd.DataFrame(outputs)
+        state.update((history,))
 
-    # -----------------------------------
-    # 8. Update state
-    # -----------------------------------
-    state.update((history,))  # tuple: one element per state schema field, in order
+        if latest_ts is not None:
+            state.setTimeoutTimestamp(
+                int(latest_ts.timestamp() * 1000) + TIMEOUT_MS
+            )
 
-    # -----------------------------------
-    # 9. Set timeout safely
-    # -----------------------------------
-    if latest_ts is not None:
-        state.setTimeoutTimestamp(
-            int(latest_ts.timestamp() * 1000) + 3 * 60 * 60 * 1000
-        )
-        
+    return update_state
 
 
     
-def build_stream(spark, out_path, ckpt_path):
+def build_stream(spark, config):
     # load necessary dotenv vars
     load_dotenv()
     KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS")
@@ -156,6 +118,18 @@ def build_stream(spark, out_path, ckpt_path):
     KAFKA_API_SECRET = os.getenv("KAFKA_API_SECRET")
     KAFKA_TOPIC = os.getenv("KAFKA_TOPIC")
 
+    out_path = config["out_path"]
+    ckpt_path = config["ckpt_path"]
+    metric_column = config["metric_column"]
+    watermark_duration = config["watermark_duration"]
+
+    update_state = make_update_state(
+        min_z_score=config["min_z_score"],
+        min_data_points=config["min_data_points"],
+        window_size_hours=config["window_size_hours"],
+        metric_column=metric_column,
+        timeout_hours=config["timeout_hours"]
+    )
 
     schema = StructType([
         StructField("id", IntegerType(), True),
@@ -216,7 +190,7 @@ def build_stream(spark, out_path, ckpt_path):
     # -----------------------------------
     # 4. Add watermark (for state cleanup)
     # -----------------------------------
-    watermarked_df = parsed_df.withWatermark("event_ts", "3 hours")
+    watermarked_df = parsed_df.withWatermark("event_ts", watermark_duration)
 
 
     # TODO: Define schema for result
@@ -224,8 +198,9 @@ def build_stream(spark, out_path, ckpt_path):
         StructField("id", IntegerType()),
         StructField("event_id", StringType()),
         StructField("event_ts", TimestampType()),
-        StructField("curr_price", DoubleType()),
-        StructField("past_prices", ArrayType(DoubleType())),
+        StructField("curr_val", DoubleType()),
+        StructField("past_vals", ArrayType(DoubleType())),
+        StructField("column_name_for_val_tracked", StringType()),
         StructField("past_timestamps", ArrayType(TimestampType())),
         StructField("mean", DoubleType()),
         StructField("std", DoubleType()),
@@ -243,16 +218,18 @@ def build_stream(spark, out_path, ckpt_path):
         )
     ])
 
-    result_df = watermarked_df.groupBy("id").applyInPandasWithState(
-        update_state,
-        outputStructType=result_schema,
-        stateStructType=state_schema,
-        outputMode="append",
-        timeoutConf="EventTimeTimeout"
-    ) \
-    .withColumn("past_prices", col("past_prices").cast("string")) \
-    .withColumn("past_timestamps", col("past_timestamps").cast("string")) \
-    .withColumn("alert_id", col("event_id"))
+    result_df = watermarked_df \
+        .groupBy("id") \
+        .applyInPandasWithState(
+            update_state,
+            outputStructType=result_schema,
+            stateStructType=state_schema,
+            outputMode="append",
+            timeoutConf="EventTimeTimeout"
+        ) \
+        .withColumn("past_vals", col("past_vals").cast("string")) \
+        .withColumn("past_timestamps", col("past_timestamps").cast("string")) \
+        .withColumn("alert_id", col("event_id"))
 
     # -----------------------------------
     # 6. Split outputs
@@ -260,7 +237,7 @@ def build_stream(spark, out_path, ckpt_path):
     raw_df = parsed_df
     raw_df = raw_df.withColumn("event_dt", to_date("event_ts"))
 
-    alerts_df = result_df.filter(col("is_anomaly") == True)
+    alerts_df = result_df
     alerts_df = alerts_df.withColumn("event_dt", to_date("event_ts"))
 
     # -----------------------------------
@@ -312,18 +289,29 @@ def build_stream(spark, out_path, ckpt_path):
     return [raw_query, alerts_query]
 
 def main():
+    load_dotenv()
+    config = {
+        "out_path":           os.getenv("OUT_PATH"),
+        "ckpt_path":          os.getenv("CKPT_PATH"),
+        "min_z_score":        float(os.getenv("MIN_Z_SCORE_FOR_ANOMALY", 2.0)),
+        "min_data_points":    int(os.getenv("MIN_DATA_POINTS", 10)),
+        "window_size_hours":  float(os.getenv("WINDOW_SIZE_HOURS", 1)),
+        "metric_column":      os.getenv("METRIC_COLUMN", "percent_change_1h"),
+        "timeout_hours":      float(os.getenv("TIMEOUT_HOURS", 1)),
+        "watermark_duration": os.getenv("WATERMARK_DURATION", "3 hours"),
+    }
+    
     spark_session = create_spark_session()
     print("spark_session_created")
     try:
         print("Trying build_stream()")
-        queries = build_stream(spark_session, "/home/compute/d.linus/data-engineering-anomaly-detector/output", "/home/compute/d.linus/data-engineering-anomaly-detector/checkpoints")
+        queries = build_stream(spark_session, config)
         for q in queries:
             q.awaitTermination()
-        print("Finished build_stream()")
     except KeyboardInterrupt:
         for q in queries:
             q.stop()
-        print("Exiting gracefully from keyboard interrupt")
+        print("Exited gracefully from keyboard interrupt")
     except Exception as e:
         print("Exception encountered")
         print(e)
